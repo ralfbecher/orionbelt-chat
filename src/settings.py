@@ -28,9 +28,6 @@ class Settings(BaseSettings):
     default_provider: str = "openrouter"
     default_model: str = ""  # if empty, uses provider default above
 
-    # ── OrionBelt services ─────────────────────────────────────
-    orionbelt_api_url: str = "http://localhost:8000"
-
     # ── MCP server paths (for stdio transport) ─────────────────
     analytics_server_dir: str = "../orionbelt-analytics"
     semantic_layer_server_dir: str = "../orionbelt-semantic-layer"
