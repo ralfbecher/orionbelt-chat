@@ -30,7 +30,7 @@ class Settings(BaseSettings):
 
     # ── MCP server paths (for stdio transport) ─────────────────
     analytics_server_dir: str = "../orionbelt-analytics"
-    semantic_layer_server_dir: str = "../orionbelt-semantic-layer"
+    semantic_layer_server_dir: str = "../orionbelt-semantic-layer-mcp"
 
     # Transport: "stdio" (subprocess) or "http" (running server)
     analytics_transport: str = "stdio"
