@@ -34,12 +34,6 @@ def build_chat_settings() -> list[cl.input_widget.InputWidget]:
             placeholder="e.g. openrouter:google/gemini-2.5-pro or mlx-community/MyModel-4bit",
             tooltip="Leave empty to use the model selected above",
         ),
-        cl.TextInput(
-            id="system_prompt_extra",
-            label="Additional system prompt instructions",
-            initial="",
-            placeholder="Optional: add context about your data or preferences",
-        ),
     ]
 
 
@@ -65,22 +59,28 @@ async def on_start():
     cl.user_session.set("pydantic_history", None)
 
     # Create agent and start MCP servers
-    await _init_agent(provider, model)
+    init_success = await _init_agent(provider, model)
 
-    await cl.Message(
-        content=(
-            f"**OrionBelt Analytics Assistant** ready.\n\n"
-            f"Provider: `{provider}` | Model: `{model}`\n\n"
-            f"Connected MCP servers:\n"
-            f"- `orionbelt-analytics`\n"
-            f"- `orionbelt-semantic-layer`\n\n"
-            f"Ask me anything about your data."
-        )
-    ).send()
+    if init_success:
+        await cl.Message(
+            content=(
+                f"**OrionBelt Analytics Assistant** ready.\n\n"
+                f"Provider: `{provider}` | Model: `{model}`\n\n"
+                f"Connected MCP servers:\n"
+                f"- `orionbelt-analytics`\n"
+                f"- `orionbelt-semantic-layer`\n\n"
+                f"Ask me anything about your data."
+            )
+        ).send()
 
 
-async def _init_agent(provider: str, model: str):
-    """Create agent, enter MCP context, store in session."""
+async def _init_agent(provider: str, model: str) -> bool:
+    """
+    Create agent, enter MCP context, store in session.
+
+    Returns:
+        True if initialization succeeded, False otherwise
+    """
     # Close previous MCP context if it exists
     prev_ctx = cl.user_session.get("mcp_context")
     if prev_ctx:
@@ -95,6 +95,7 @@ async def _init_agent(provider: str, model: str):
         await mcp_ctx.__aenter__()
         cl.user_session.set("agent", agent)
         cl.user_session.set("mcp_context", mcp_ctx)
+        return True
     except Exception as e:
         cl.user_session.set("agent", None)
         cl.user_session.set("mcp_context", None)
@@ -102,6 +103,7 @@ async def _init_agent(provider: str, model: str):
             content=f"⚠️ Failed to initialise agent: {e}",
             author="System",
         ).send()
+        return False
 
 
 @cl.on_chat_end
@@ -138,12 +140,13 @@ async def on_settings_update(settings_values: dict):
         author="System",
     ).send()
 
-    await _init_agent(provider, model)
+    init_success = await _init_agent(provider, model)
 
-    await cl.Message(
-        content=f"✅ Now using `{model}` via `{provider}`.",
-        author="System",
-    ).send()
+    if init_success:
+        await cl.Message(
+            content=f"✅ Now using `{model}` via `{provider}`.",
+            author="System",
+        ).send()
 
 
 # ── Message handler ────────────────────────────────────────────────────────
@@ -172,7 +175,7 @@ async def on_message(message: cl.Message):
 
     # Track tool calls for collapsible steps
     active_step: cl.Step | None = None
-    chart_elements: list[cl.Html] = []
+    chart_elements: list[cl.Text] = []
 
     try:
         async with agent.run_stream(

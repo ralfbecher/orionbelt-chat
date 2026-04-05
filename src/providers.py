@@ -116,6 +116,10 @@ def resolve_model(provider: str, model: str):
 
 def default_model_for(provider: str) -> str:
     """Return the default model string for a provider."""
+    # Use global default_model override if set
+    if settings.default_model:
+        return settings.default_model
+
     defaults = {
         "openrouter": settings.openrouter_default_model,
         "mlx": settings.mlx_default_model,

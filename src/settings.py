@@ -28,16 +28,9 @@ class Settings(BaseSettings):
     default_provider: str = "openrouter"
     default_model: str = ""  # if empty, uses provider default above
 
-    # ── MCP server paths (for stdio transport) ─────────────────
+    # ── MCP server paths (stdio transport) ─────────────────
     analytics_server_dir: str = "../orionbelt-analytics"
     semantic_layer_server_dir: str = "../orionbelt-semantic-layer-mcp"
-
-    # Transport: "stdio" (subprocess) or "http" (running server)
-    analytics_transport: str = "stdio"
-    analytics_http_url: str = "http://localhost:8001/mcp"
-
-    semantic_transport: str = "stdio"
-    semantic_http_url: str = "http://localhost:8002/mcp"
 
     model_config = SettingsConfigDict(
         env_file=".env",
