@@ -1,9 +1,11 @@
 """OrionBelt Chat - Chainlit + Pydantic AI application entry point."""
 
 import chainlit as cl
+from chainlit.input_widget import Select, TextInput
 
 from src.agent import make_agent
 from src.chart_renderer import render_chart_if_present
+from src.mcp_servers import get_mcp_servers
 from src.providers import PROVIDER_LABELS, PROVIDER_MODELS, default_model_for
 from src.settings import settings
 
@@ -14,20 +16,20 @@ from src.settings import settings
 def build_chat_settings() -> list[cl.input_widget.InputWidget]:
     """Define the settings panel shown in the Chainlit sidebar."""
     return [
-        cl.Select(
+        Select(
             id="provider",
             label="LLM Provider",
             values=list(PROVIDER_LABELS.keys()),
             initial_value=settings.default_provider,
             tooltip="Select your AI provider",
         ),
-        cl.Select(
+        Select(
             id="model",
             label="Model",
             values=PROVIDER_MODELS.get(settings.default_provider, []),
             initial_value=default_model_for(settings.default_provider),
         ),
-        cl.TextInput(
+        TextInput(
             id="custom_model",
             label="Custom model name (overrides above)",
             initial="",
@@ -62,13 +64,18 @@ async def on_start():
     init_success = await _init_agent(provider, model)
 
     if init_success:
+        mcp_servers = get_mcp_servers()
+        if mcp_servers:
+            server_list = "\n".join(f"- `{type(s).__name__}`" for s in mcp_servers)
+            mcp_info = f"Connected MCP servers:\n{server_list}"
+        else:
+            mcp_info = "No MCP servers configured."
+
         await cl.Message(
             content=(
                 f"**OrionBelt Analytics Assistant** ready.\n\n"
                 f"Provider: `{provider}` | Model: `{model}`\n\n"
-                f"Connected MCP servers:\n"
-                f"- `orionbelt-analytics`\n"
-                f"- `orionbelt-semantic-layer`\n\n"
+                f"{mcp_info}\n\n"
                 f"Ask me anything about your data."
             )
         ).send()
@@ -173,8 +180,6 @@ async def on_message(message: cl.Message):
     response_msg = cl.Message(content="")
     await response_msg.send()
 
-    # Track tool calls for collapsible steps
-    active_step: cl.Step | None = None
     chart_elements: list[cl.Text] = []
 
     try:
@@ -183,37 +188,11 @@ async def on_message(message: cl.Message):
             message_history=msg_history,
         ) as streamed:
 
-            async for event in streamed.stream_events():
-                event_type = type(event).__name__
-
-                # ── Streaming text tokens ──────────────────────────
-                if event_type == "PartDeltaEvent":
-                    delta = getattr(event.delta, "content_delta", None)
-                    if delta:
-                        await response_msg.stream_token(delta)
-
-                # ── Tool call start ────────────────────────────────
-                elif event_type == "PartStartEvent":
-                    part = event.part
-                    if hasattr(part, "tool_name"):
-                        # Close previous step if open
-                        if active_step:
-                            await active_step.__aexit__(None, None, None)
-                        active_step = cl.Step(
-                            name=part.tool_name,
-                            type="tool",
-                            show_input=True,
-                        )
-                        await active_step.__aenter__()
-                        if hasattr(part, "args"):
-                            active_step.input = str(part.args)
+            async for chunk in streamed.stream_text(delta=True):
+                await response_msg.stream_token(chunk)
 
             # Finalise streaming
             await response_msg.update()
-
-            # Close any open tool step
-            if active_step:
-                await active_step.__aexit__(None, None, None)
 
             # Save message history for next turn (multi-turn context)
             cl.user_session.set(
@@ -228,29 +207,21 @@ async def on_message(message: cl.Message):
                     part_type = type(part).__name__
                     if part_type == "ToolReturnPart":
                         content = str(getattr(part, "content", ""))
-                        # Get the MCP server that owns this tool
-                        # (simplified: try analytics first, then semantic layer)
                         for server in agent.toolsets:
                             chart_el = await render_chart_if_present(content, server)
                             if chart_el:
                                 chart_elements.append(chart_el)
                                 break
 
-            # Send charts as separate messages with elements
             if chart_elements:
                 chart_msg = cl.Message(
-                    content="📊 Interactive chart:",
+                    content="Interactive chart:",
                     elements=chart_elements,
                 )
                 await chart_msg.send()
 
     except Exception as e:
         await cl.Message(
-            content=f"❌ Error: {e}",
+            content=f"Error: {e}",
             author="System",
         ).send()
-        if active_step:
-            try:
-                await active_step.__aexit__(type(e), e, None)
-            except Exception:
-                pass

@@ -9,51 +9,23 @@ def _is_url(value: str) -> bool:
     return value.startswith("http://") or value.startswith("https://")
 
 
-def get_analytics_server() -> MCPServerHTTP | MCPServerStdio:
-    """
-    Return Pydantic AI MCP server for orionbelt-analytics.
-
-    If the configured value is an HTTP(S) URL, returns an MCPServerHTTP
-    instance (Streamable HTTP transport). Otherwise treats it as a local
-    directory path and returns an MCPServerStdio instance.
-    """
-    endpoint = settings.analytics_server_dir
+def _make_server(endpoint: str, module: str) -> MCPServerHTTP | MCPServerStdio:
     if _is_url(endpoint):
         return MCPServerHTTP(url=endpoint, timeout=60)
     return MCPServerStdio(
         "uv",
-        args=[
-            "run",
-            "--directory",
-            endpoint,
-            "python",
-            "-m",
-            "orionbelt_analytics",
-        ],
+        args=["run", "--directory", endpoint, "python", "-m", module],
         timeout=60,
     )
 
 
-def get_semantic_layer_server() -> MCPServerHTTP | MCPServerStdio:
-    """
-    Return Pydantic AI MCP server for orionbelt-semantic-layer.
-
-    If the configured value is an HTTP(S) URL, returns an MCPServerHTTP
-    instance (Streamable HTTP transport). Otherwise treats it as a local
-    directory path and returns an MCPServerStdio instance.
-    """
-    endpoint = settings.semantic_layer_server_dir
-    if _is_url(endpoint):
-        return MCPServerHTTP(url=endpoint, timeout=60)
-    return MCPServerStdio(
-        "uv",
-        args=[
-            "run",
-            "--directory",
-            endpoint,
-            "python",
-            "-m",
-            "orionbelt_semantic_layer",
-        ],
-        timeout=60,
-    )
+def get_mcp_servers() -> list[MCPServerHTTP | MCPServerStdio]:
+    """Return list of configured MCP servers. Skips servers with empty config."""
+    servers = []
+    if settings.analytics_server_dir:
+        servers.append(_make_server(settings.analytics_server_dir, "orionbelt_analytics"))
+    if settings.semantic_layer_server_dir:
+        servers.append(
+            _make_server(settings.semantic_layer_server_dir, "orionbelt_semantic_layer")
+        )
+    return servers

@@ -2,7 +2,7 @@
 
 from pydantic_ai import Agent
 
-from .mcp_servers import get_analytics_server, get_semantic_layer_server
+from .mcp_servers import get_mcp_servers
 from .prompts import SYSTEM_PROMPT
 from .providers import resolve_model
 
@@ -34,9 +34,6 @@ def make_agent(provider: str, model: str) -> Agent:
 
     return Agent(
         model=llm_model,
-        toolsets=[
-            get_analytics_server(),
-            get_semantic_layer_server(),
-        ],
+        toolsets=get_mcp_servers(),
         system_prompt=SYSTEM_PROMPT,
     )

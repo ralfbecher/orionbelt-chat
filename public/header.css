@@ -1,0 +1,51 @@
+/* OrionBelt Chat – custom header */
+
+/* Brand block: absolutely positioned left */
+.orionbelt-header-brand {
+  position: absolute;
+  left: 48px; /* after the new-chat button */
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  z-index: 10;
+}
+
+.orionbelt-header-logo {
+  height: 32px;
+  width: auto;
+  object-fit: contain;
+}
+
+.orionbelt-header-name {
+  font-size: 1.15rem;
+  font-weight: 500;
+  color: #d1d5db;
+  white-space: nowrap;
+  line-height: 1;
+  align-self: flex-end;
+  margin-bottom: 2px;
+}
+
+/* Version badge */
+.orionbelt-version {
+  font-size: 0.8rem;
+  color: #9ca3af;
+  font-weight: 400;
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  margin-right: 0.25rem;
+  user-select: none;
+}
+
+/* Invert GitHub SVG icons so they appear white on dark header */
+a img[src*="github"] {
+  filter: invert(1);
+}
+
+/* Hide icon for Report Issue link */
+a[href*="issues"] img {
+  display: none;
+}

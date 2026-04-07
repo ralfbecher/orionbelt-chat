@@ -1,7 +1,9 @@
 """LLM provider resolution for Pydantic AI."""
 
-from pydantic_ai.models.openai import OpenAIModel
 from pydantic_ai.models.anthropic import AnthropicModel
+from pydantic_ai.models.openai import OpenAIModel
+from pydantic_ai.providers.anthropic import AnthropicProvider
+from pydantic_ai.providers.openai import OpenAIProvider
 
 from .settings import settings
 
@@ -75,23 +77,29 @@ def resolve_model(provider: str, model: str):
                 raise ValueError("OPENROUTER_API_KEY not set in environment")
             return OpenAIModel(
                 model,
-                base_url="https://openrouter.ai/api/v1",
-                api_key=settings.openrouter_api_key,
+                provider=OpenAIProvider(
+                    base_url="https://openrouter.ai/api/v1",
+                    api_key=settings.openrouter_api_key,
+                ),
             )
 
         case "mlx":
             # mlx-openai-server exposes an OpenAI-compatible endpoint
             return OpenAIModel(
                 model,
-                base_url=settings.mlx_base_url,
-                api_key="mlx-local",  # ignored by local server
+                provider=OpenAIProvider(
+                    base_url=settings.mlx_base_url,
+                    api_key="mlx-local",  # ignored by local server
+                ),
             )
 
         case "ollama":
             return OpenAIModel(
                 model,
-                base_url=settings.ollama_base_url,
-                api_key="ollama",  # ignored by local server
+                provider=OpenAIProvider(
+                    base_url=settings.ollama_base_url,
+                    api_key="ollama",  # ignored by local server
+                ),
             )
 
         case "anthropic":
@@ -99,7 +107,9 @@ def resolve_model(provider: str, model: str):
                 raise ValueError("ANTHROPIC_API_KEY not set in environment")
             return AnthropicModel(
                 model,
-                api_key=settings.anthropic_api_key,
+                provider=AnthropicProvider(
+                    api_key=settings.anthropic_api_key,
+                ),
             )
 
         case "openai":
@@ -107,7 +117,9 @@ def resolve_model(provider: str, model: str):
                 raise ValueError("OPENAI_API_KEY not set in environment")
             return OpenAIModel(
                 model,
-                api_key=settings.openai_api_key,
+                provider=OpenAIProvider(
+                    api_key=settings.openai_api_key,
+                ),
             )
 
         case _:

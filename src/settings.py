@@ -33,8 +33,8 @@ class Settings(BaseSettings):
     #   - a local directory path  → stdio transport (spawns subprocess)
     #   - an HTTP(S) URL          → Streamable HTTP transport (remote)
     # Set the *_dir variable to a path or URL accordingly.
-    analytics_server_dir: str = "../orionbelt-analytics"
-    semantic_layer_server_dir: str = "../orionbelt-semantic-layer-mcp"
+    analytics_server_dir: str = ""
+    semantic_layer_server_dir: str = ""
 
     model_config = SettingsConfigDict(
         env_file=".env",
