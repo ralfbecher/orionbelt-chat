@@ -1,26 +1,31 @@
 """MCP server configuration and lifecycle management."""
 
-from pydantic_ai.mcp import MCPServerStdio
+from pydantic_ai.mcp import MCPServerHTTP, MCPServerStdio
 
 from .settings import settings
 
 
-def get_analytics_server():
+def _is_url(value: str) -> bool:
+    return value.startswith("http://") or value.startswith("https://")
+
+
+def get_analytics_server() -> MCPServerHTTP | MCPServerStdio:
     """
     Return Pydantic AI MCP server for orionbelt-analytics.
 
-    The server will be started as a subprocess when entering the MCP context
-    via agent.run_mcp_servers(). Supports stdio transport only for now.
-
-    Returns:
-        MCPServerStdio instance configured for orionbelt-analytics
+    If the configured value is an HTTP(S) URL, returns an MCPServerHTTP
+    instance (Streamable HTTP transport). Otherwise treats it as a local
+    directory path and returns an MCPServerStdio instance.
     """
+    endpoint = settings.analytics_server_dir
+    if _is_url(endpoint):
+        return MCPServerHTTP(url=endpoint, timeout=60)
     return MCPServerStdio(
         "uv",
         args=[
             "run",
             "--directory",
-            settings.analytics_server_dir,
+            endpoint,
             "python",
             "-m",
             "orionbelt_analytics",
@@ -29,22 +34,23 @@ def get_analytics_server():
     )
 
 
-def get_semantic_layer_server():
+def get_semantic_layer_server() -> MCPServerHTTP | MCPServerStdio:
     """
     Return Pydantic AI MCP server for orionbelt-semantic-layer.
 
-    The server will be started as a subprocess when entering the MCP context
-    via agent.run_mcp_servers(). Supports stdio transport only for now.
-
-    Returns:
-        MCPServerStdio instance configured for orionbelt-semantic-layer
+    If the configured value is an HTTP(S) URL, returns an MCPServerHTTP
+    instance (Streamable HTTP transport). Otherwise treats it as a local
+    directory path and returns an MCPServerStdio instance.
     """
+    endpoint = settings.semantic_layer_server_dir
+    if _is_url(endpoint):
+        return MCPServerHTTP(url=endpoint, timeout=60)
     return MCPServerStdio(
         "uv",
         args=[
             "run",
             "--directory",
-            settings.semantic_layer_server_dir,
+            endpoint,
             "python",
             "-m",
             "orionbelt_semantic_layer",
