@@ -1,6 +1,6 @@
 <!-- mcp-name: io.github.ralfbecher/orionbelt-chat -->
 <p align="center">
-  <img src="https://raw.githubusercontent.com/ralfbecher/orionbelt-analytics/main/assets/ORIONBELT_Logo.png" alt="OrionBelt Logo" width="400">
+  <img src="https://raw.githubusercontent.com/ralfbecher/orionbelt-chat/main/assets/ORIONBELT_Logo.png" alt="OrionBelt Logo" width="400">
 </p>
 
 <h1 align="center">OrionBelt Chat</h1>
@@ -169,12 +169,12 @@ Create an OBML model for customer analytics with metrics for revenue, order coun
 ┌──────────────────────────────────────────────────────────────┐
 │          OrionBelt Chat (Chainlit + Pydantic AI)             │
 │                                                              │
-│  ┌──────────┐         ┌──────────────────────────────────┐  │
-│  │  Chat UI │         │  Pydantic AI Agent + MCP Client │  │
-│  │          │────────>│  - Multi-turn context          │  │
-│  │ Chainlit │         │  - Streaming events            │  │
-│  │  2.0+    │         │  - Tool orchestration          │  │
-│  └──────────┘         └──────────────────────────────────┘  │
+│  ┌──────────┐         ┌──────────────────────────────────┐   │
+│  │  Chat UI │         │  Pydantic AI Agent + MCP Client  │   │
+│  │          │────────>│  - Multi-turn context            │   │
+│  │ Chainlit │         │  - Streaming events              │   │
+│  │  2.0+    │         │  - Tool orchestration            │   │
+│  └──────────┘         └──────────────────────────────────┘   │
 └──────────────────────────────────────────────────────────────┘
          │                      │
          │                      ├──> orionbelt-analytics (MCP stdio)
@@ -253,6 +253,7 @@ uv run ruff check --fix
 **Symptom:** Agent initialization fails on startup
 
 **Solutions:**
+
 - Ensure `ANALYTICS_SERVER_DIR` and `SEMANTIC_LAYER_SERVER_DIR` point to correct paths
 - Check that both repos have dependencies installed (`uv sync`)
 - Verify both MCP servers can start independently (`uv run server.py`)
@@ -263,6 +264,7 @@ uv run ruff check --fix
 **Symptom:** Charts don't appear after generate_chart tool call
 
 **Solutions:**
+
 - Verify `orionbelt-analytics` has MCP Apps support (v1.2.0+)
 - Check browser console for iframe or CSP errors
 - Ensure chart data is valid JSON in tool result
@@ -273,6 +275,7 @@ uv run ruff check --fix
 **Symptom:** Model ignores tools and tries to answer directly
 
 **Solutions:**
+
 - Ensure `--enable-auto-tool-choice` flag is set when starting mlx-openai-server
 - Use an instruct-tuned model (with `-Instruct` suffix)
 - Try a different model (Qwen2.5 series has best tool support)
@@ -283,6 +286,7 @@ uv run ruff check --fix
 **Symptom:** Response stops mid-generation
 
 **Solutions:**
+
 - Check MCP server logs for errors
 - Verify tool calls are completing successfully
 - Increase timeout settings if using slow local models
@@ -302,16 +306,19 @@ See [LICENSE](./LICENSE) for full terms.
 ## 🔗 Links
 
 ### OrionBelt Platform
+
 - [**OrionBelt Analytics**](https://github.com/ralfbecher/orionbelt-analytics) - MCP server for database analysis and ontology generation
 - [**OrionBelt Semantic Layer**](https://github.com/ralfbecher/orionbelt-semantic-layer) - MCP server for OBML models and semantic SQL compilation
 - [**OrionBelt Ontology Builder**](https://github.com/ralfbecher/orionbelt-ontology-builder) - Visual ontology editor (Streamlit app)
 
 ### Frameworks
+
 - [**Chainlit**](https://docs.chainlit.io) - Chat UI framework
 - [**Pydantic AI**](https://ai.pydantic.dev) - Agent framework with MCP support
 - [**Model Context Protocol**](https://modelcontextprotocol.io) - Tool integration standard
 
 ### LLM Providers
+
 - [**OpenRouter**](https://openrouter.ai) - Unified API for 300+ models
 - [**MLX**](https://github.com/ml-explore/mlx) - Apple Silicon inference
 - [**Ollama**](https://ollama.com) - Local LLM runtime
@@ -320,11 +327,6 @@ See [LICENSE](./LICENSE) for full terms.
 
 <p align="center">
   <a href="https://ralforion.com">
-    <img src="https://raw.githubusercontent.com/ralfbecher/orionbelt-analytics/main/assets/RALFORION_doo_Logo.png" alt="RALFORION d.o.o." height="60">
+    <img src="https://raw.githubusercontent.com/ralfbecher/orionbelt-chat/main/assets/RALFORION_doo_Logo.png" alt="RALFORION d.o.o." width="200">
   </a>
-</p>
-
-<p align="center">
-  <strong>Built by RALFORION d.o.o.</strong><br>
-  Enterprise-grade data intelligence solutions
 </p>
