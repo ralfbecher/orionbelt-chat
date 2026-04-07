@@ -21,11 +21,15 @@
 .orionbelt-header-name {
   font-size: 1.15rem;
   font-weight: 500;
-  color: #d1d5db;
+  color: #1f2937;
   white-space: nowrap;
   line-height: 1;
   align-self: flex-end;
   margin-bottom: 2px;
+}
+
+.dark .orionbelt-header-name {
+  color: #d1d5db;
 }
 
 /* Version badge */

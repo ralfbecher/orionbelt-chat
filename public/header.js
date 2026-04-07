@@ -1,7 +1,8 @@
 // Inject OrionBelt logo, app name, and version badge into the Chainlit header
 (function injectHeader() {
   var VERSION = "v0.5.0";
-  var LOGO_URL = "/public/logo_w.png";
+  var LOGO_DARK = "/public/logo_w.png";
+  var LOGO_LIGHT = "/public/logo.png";
   var APP_NAME = "Chat";
 
   function insert() {
@@ -30,10 +31,19 @@
     var brand = document.createElement("div");
     brand.className = "orionbelt-header-brand";
 
+    var isDark = document.documentElement.classList.contains("dark") ||
+      window.matchMedia("(prefers-color-scheme: dark)").matches;
+
     var logo = document.createElement("img");
-    logo.src = LOGO_URL;
+    logo.src = isDark ? LOGO_DARK : LOGO_LIGHT;
     logo.alt = "OrionBelt";
     logo.className = "orionbelt-header-logo";
+
+    // Switch logo when theme changes
+    new MutationObserver(function () {
+      var dark = document.documentElement.classList.contains("dark");
+      logo.src = dark ? LOGO_DARK : LOGO_LIGHT;
+    }).observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
 
     var appName = document.createElement("span");
     appName.className = "orionbelt-header-name";
