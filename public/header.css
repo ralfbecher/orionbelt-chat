@@ -49,3 +49,15 @@ a img[src*="github"] {
 a[href*="issues"] img {
   display: none;
 }
+
+/* Pulsing avatar animation while waiting for LLM response */
+@keyframes orionbelt-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+.orionbelt-thinking {
+  animation: orionbelt-pulse 1.2s ease-in-out infinite;
+}
+
+

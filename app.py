@@ -176,13 +176,12 @@ async def on_message(message: cl.Message):
     # Get message history for multi-turn context
     msg_history = cl.user_session.get("pydantic_history")
 
-    # Prepare the response message (streams tokens into it)
-    response_msg = cl.Message(content="")
-    await response_msg.send()
-
     chart_elements: list[cl.Text] = []
 
     try:
+        response_msg = cl.Message(content="")
+        await response_msg.send()
+
         async with agent.run_stream(
             message.content,
             message_history=msg_history,
