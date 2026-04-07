@@ -166,6 +166,10 @@ Create an OBML model for customer analytics with metrics for revenue, order coun
 
 ## 🏗️ Architecture
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/ralfbecher/orionbelt-chat/main/assets/architecture.png" alt="OrionBelt Chat Architecture" width="800">
+</p>
+
 ```
 ┌──────────────────────────────────────────────────────────────┐
 │          OrionBelt Chat (Chainlit + Pydantic AI)             │
