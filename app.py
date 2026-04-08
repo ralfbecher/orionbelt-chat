@@ -1,7 +1,21 @@
 """OrionBelt Chat - Chainlit + Pydantic AI application entry point."""
 
+import json
+import logging
+
 import chainlit as cl
 from chainlit.input_widget import Select, TextInput
+from pydantic_ai import AgentRunResultEvent
+from pydantic_ai.messages import (
+    FunctionToolCallEvent,
+    FunctionToolResultEvent,
+    PartDeltaEvent,
+    PartStartEvent,
+    TextPart,
+    TextPartDelta,
+)
+
+logger = logging.getLogger(__name__)
 
 from src.agent import make_agent
 from src.chart_renderer import render_chart_if_present
@@ -162,8 +176,8 @@ async def on_settings_update(settings_values: dict):
 @cl.on_message
 async def on_message(message: cl.Message):
     """
-    Main handler. Runs the Pydantic AI agent with streaming,
-    renders tool call steps, and injects charts inline.
+    Main handler. Runs the Pydantic AI agent with event streaming,
+    shows tool call steps in the UI, and injects charts inline.
     """
     agent = cl.user_session.get("agent")
     if agent is None:
@@ -177,34 +191,80 @@ async def on_message(message: cl.Message):
     msg_history = cl.user_session.get("pydantic_history")
 
     chart_elements: list[cl.Text] = []
+    response_msg = cl.Message(content="")
+    active_step: cl.Step | None = None
+    result_messages = None
 
     try:
-        response_msg = cl.Message(content="")
         await response_msg.send()
 
-        async with agent.run_stream(
+        async for event in agent.run_stream_events(
             message.content,
             message_history=msg_history,
-        ) as streamed:
+        ):
+            # ── Final result: capture messages for history + charts ──
+            if isinstance(event, AgentRunResultEvent):
+                result_messages = event.result.all_messages()
+                continue
 
-            async for chunk in streamed.stream_text(delta=True):
+            # ── Tool call start ──────────────────────────────────────
+            if isinstance(event, FunctionToolCallEvent):
+                tool_name = event.part.tool_name
+                tool_args = event.part.args
+                if isinstance(tool_args, str):
+                    try:
+                        tool_args = json.loads(tool_args)
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+
+                logger.info("Tool call: %s(%s)", tool_name, tool_args)
+
+                active_step = cl.Step(name=tool_name, type="tool")
+                active_step.input = json.dumps(tool_args, indent=2) if isinstance(tool_args, dict) else str(tool_args)
+                await active_step.send()
+                continue
+
+            # ── Tool call result ─────────────────────────────────────
+            if isinstance(event, FunctionToolResultEvent):
+                result_content = str(event.result.content)
+                logger.info(
+                    "Tool result: %s → %s",
+                    event.result.tool_name,
+                    result_content[:200],
+                )
+
+                if active_step:
+                    active_step.output = result_content
+                    await active_step.update()
+                    active_step = None
+                continue
+
+            # ── Text streaming ───────────────────────────────────────
+            if isinstance(event, PartStartEvent) and isinstance(event.part, TextPart):
+                if event.part.content:
+                    await response_msg.stream_token(event.part.content)
+                continue
+
+            if isinstance(event, PartDeltaEvent) and isinstance(event.delta, TextPartDelta):
+                chunk = event.delta.content_delta
+                # Filter leaked model thinking tokens (e.g. Gemma)
+                if "<|channel>" in chunk or "<channel|>" in chunk:
+                    continue
                 await response_msg.stream_token(chunk)
+                continue
 
-            # Finalise streaming
-            await response_msg.update()
+        # Finalise streaming
+        await response_msg.update()
 
-            # Save message history for next turn (multi-turn context)
-            cl.user_session.set(
-                "pydantic_history",
-                streamed.all_messages(),
-            )
+        # Save message history for next turn
+        if result_messages is not None:
+            cl.user_session.set("pydantic_history", result_messages)
 
-            # ── Chart rendering ─────────────────────────────────────
-            # Check tool results for MCP Apps ui:// resources
-            for msg in streamed.all_messages():
+        # ── Chart rendering ─────────────────────────────────────
+        if result_messages:
+            for msg in result_messages:
                 for part in getattr(msg, "parts", []):
-                    part_type = type(part).__name__
-                    if part_type == "ToolReturnPart":
+                    if type(part).__name__ == "ToolReturnPart":
                         content = str(getattr(part, "content", ""))
                         for server in agent.toolsets:
                             chart_el = await render_chart_if_present(content, server)
@@ -212,14 +272,15 @@ async def on_message(message: cl.Message):
                                 chart_elements.append(chart_el)
                                 break
 
-            if chart_elements:
-                chart_msg = cl.Message(
-                    content="Interactive chart:",
-                    elements=chart_elements,
-                )
-                await chart_msg.send()
+        if chart_elements:
+            chart_msg = cl.Message(
+                content="Interactive chart:",
+                elements=chart_elements,
+            )
+            await chart_msg.send()
 
     except Exception as e:
+        logger.exception("Error in message handler")
         await cl.Message(
             content=f"Error: {e}",
             author="System",

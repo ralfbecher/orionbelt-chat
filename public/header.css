@@ -64,4 +64,9 @@ a[href*="issues"] img {
   animation: orionbelt-pulse 1.2s ease-in-out infinite;
 }
 
+/* Grey out the avatar icon on tool-call steps */
+[data-step-type="tool"] img {
+  filter: grayscale(1) opacity(0.5);
+}
+
 
