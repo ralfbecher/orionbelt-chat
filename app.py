@@ -5,7 +5,7 @@ from chainlit.input_widget import Select, TextInput
 
 from src.agent import make_agent
 from src.chart_renderer import render_chart_if_present
-from src.mcp_servers import get_mcp_servers
+from src.mcp_servers import get_mcp_servers, get_mcp_servers_named
 from src.providers import PROVIDER_LABELS, PROVIDER_MODELS, default_model_for
 from src.settings import settings
 
@@ -64,9 +64,9 @@ async def on_start():
     init_success = await _init_agent(provider, model)
 
     if init_success:
-        mcp_servers = get_mcp_servers()
-        if mcp_servers:
-            server_list = "\n".join(f"- `{type(s).__name__}`" for s in mcp_servers)
+        named_servers = get_mcp_servers_named()
+        if named_servers:
+            server_list = "\n".join(f"- `{name}`" for name, _ in named_servers)
             mcp_info = f"Connected MCP servers:\n{server_list}"
         else:
             mcp_info = "No MCP servers configured."
