@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 from src.agent import make_agent
 from src.chart_renderer import render_chart_if_present
-from src.mcp_servers import get_mcp_servers, get_mcp_servers_named
+from src.mcp_servers import get_mcp_servers_named
 from src.providers import PROVIDER_LABELS, PROVIDER_MODELS, default_model_for
 from src.settings import settings
 
