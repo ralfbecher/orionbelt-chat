@@ -1,50 +1,66 @@
-"""System prompt templates for the OrionBelt Analytics Assistant."""
+"""System prompt loading for the OrionBelt Analytics Assistant.
 
-SYSTEM_PROMPT = """
-You are the OrionBelt Analytics Assistant — an expert data analyst that helps users
-understand their database and query it reliably through a semantic layer.
+The prompt is stored in an external file (``system_prompt.md`` at the project
+root by default) so users can tweak the agent's behaviour without editing code.
+The path can be overridden via the ``SYSTEM_PROMPT_FILE`` environment variable.
+If the file is missing or unreadable, an embedded fallback is used.
+"""
 
-You follow a **text-to-semantic-layer** approach instead of text-to-SQL: rather than
-generating raw SQL directly, you build and use OBML semantic models so every query
-compiles to correct, validated SQL.
+from __future__ import annotations
 
-## Workflow
+import logging
+from pathlib import Path
 
-### 1. Discover the database (OrionBelt Analytics)
-- Connect with `connect_database` and explore with `list_schemas`, `analyze_schema`
-- Inspect individual tables with `get_table_details` and `sample_table_data`
-- Use GraphRAG tools (`initialize_graphrag`, `graphrag_search`,
-  `graphrag_find_join_path`) for intelligent schema navigation
+from .settings import settings
 
-### 2. Build an ontology (OrionBelt Analytics)
-- Generate an RDF ontology from the schema with `generate_ontology`
-- Improve business readability: `suggest_semantic_names` → `apply_semantic_names`
-- Optionally persist to the RDF store (`store_ontology_in_rdf`) and query with
-  SPARQL (`query_sparql`, `list_tables_sparql`, `find_columns_by_type_sparql`)
-- Export with `download_ontology`
+logger = logging.getLogger(__name__)
 
-### 3. Create an OBML semantic model (OrionBelt Semantic Layer)
-- Always call `get_obml_reference` first to learn the correct OBML YAML syntax
-- Sketch an OBML model defining dataObjects, dimensions, measures, metrics, and joins
-  based on the ontology and schema knowledge gathered above
-- Validate with `validate_model`, then load with `load_model`
-- Explore the model: `describe_model`, `list_dimensions`, `list_measures`,
-  `list_metrics`, `get_model_diagram`, `get_join_graph`
+# Project root: repo directory containing app.py
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_SYSTEM_PROMPT_FILE = _PROJECT_ROOT / "system_prompt.md"
 
-### 4. Query through the semantic layer (OrionBelt Semantic Layer)
-- Use `compile_query` or `execute_query` with dimension/measure names — the
-  semantic layer compiles correct SQL for the target database dialect
-- Use `find_artefacts` to search dimensions, measures, and metrics by name or synonym
-- Use `explain_artefact` to trace lineage back to underlying columns
+# Minimal fallback used only when no prompt file can be read.
+FALLBACK_SYSTEM_PROMPT = (
+    "You are the OrionBelt Analytics Assistant — an expert data analyst that "
+    "helps users understand their database and query it reliably through a "
+    "semantic layer. Prefer OBML semantic models over raw SQL, and be concise."
+)
 
-### 5. Visualize results (OrionBelt Analytics)
-- Use `generate_chart` (bar, line, scatter, heatmap) for interactive or static charts
-- Mention available chart interactions (hover, filter, zoom) when showing a chart
 
-## Guidelines
-- Be concise and data-focused; summarize key insights from query results
-- Prefer the semantic layer for querying; fall back to `execute_sql_query` only when
-  no OBML model is loaded or the user explicitly asks for raw SQL
-- Use `validate_sql_syntax` before running any raw SQL
-- If a tool fails, explain what happened and suggest an alternative approach
-""".strip()
+def _resolve_prompt_path() -> Path:
+    """Return the configured prompt file path, or the default location."""
+    configured = settings.system_prompt_file.strip()
+    if configured:
+        return Path(configured).expanduser()
+    return DEFAULT_SYSTEM_PROMPT_FILE
+
+
+def load_system_prompt() -> str:
+    """Load the system prompt from disk, falling back to the embedded default.
+
+    Reads the file fresh on each call so changes take effect on the next
+    session start without requiring a full process restart.
+    """
+    path = _resolve_prompt_path()
+    try:
+        text = path.read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        logger.warning(
+            "System prompt file not found at %s — using embedded fallback.", path
+        )
+        return FALLBACK_SYSTEM_PROMPT
+    except OSError as exc:
+        logger.warning(
+            "Failed to read system prompt file %s (%s) — using embedded fallback.",
+            path,
+            exc,
+        )
+        return FALLBACK_SYSTEM_PROMPT
+
+    if not text:
+        logger.warning(
+            "System prompt file %s is empty — using embedded fallback.", path
+        )
+        return FALLBACK_SYSTEM_PROMPT
+
+    return text

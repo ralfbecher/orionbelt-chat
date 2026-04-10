@@ -36,6 +36,12 @@ class Settings(BaseSettings):
     analytics_server_dir: str = ""
     semantic_layer_server_dir: str = ""
 
+    # ── System prompt ───────────────────────────────────────
+    # Path to the markdown/text file holding the agent's system prompt.
+    # If empty, defaults to `system_prompt.md` at the project root.
+    # If the file is missing, an embedded fallback prompt is used.
+    system_prompt_file: str = ""
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

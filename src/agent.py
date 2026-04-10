@@ -3,7 +3,7 @@
 from pydantic_ai import Agent
 
 from .mcp_servers import get_mcp_servers
-from .prompts import SYSTEM_PROMPT
+from .prompts import load_system_prompt
 from .providers import resolve_model
 
 
@@ -35,5 +35,5 @@ def make_agent(provider: str, model: str) -> Agent:
     return Agent(
         model=llm_model,
         toolsets=get_mcp_servers(),
-        system_prompt=SYSTEM_PROMPT,
+        system_prompt=load_system_prompt(),
     )
