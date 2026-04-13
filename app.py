@@ -376,17 +376,31 @@ async def on_message(message: cl.Message):
 
         # ── Chart rendering ─────────────────────────────────────
         if result_messages:
+            mcp_servers = [s for s in agent.toolsets if hasattr(s, "read_resource")]
+            logger.info(
+                "Chart scan: %d messages, %d MCP servers with read_resource",
+                len(result_messages), len(mcp_servers),
+            )
             for msg in result_messages:
                 for part in getattr(msg, "parts", []):
                     if type(part).__name__ == "ToolReturnPart":
-                        content = str(getattr(part, "content", ""))
-                        for server in agent.toolsets:
+                        raw = getattr(part, "content", "")
+                        # content may be str, dict, or list — flatten to string for URI detection
+                        content = json.dumps(raw) if isinstance(raw, (dict, list)) else str(raw)
+                        logger.info(
+                            "ToolReturnPart [%s] (%d chars): %.200s",
+                            getattr(part, "tool_name", "?"),
+                            len(content),
+                            content[:200],
+                        )
+                        for server in mcp_servers:
                             chart_el = await render_chart_if_present(content, server)
                             if chart_el:
                                 chart_elements.append(chart_el)
                                 break
 
         if chart_elements:
+            logger.info("Sending %d chart elements", len(chart_elements))
             await cl.Message(
                 content="",
                 elements=chart_elements,
