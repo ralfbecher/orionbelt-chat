@@ -3,28 +3,20 @@
 import base64
 import re
 
-import chainlit as cl
-
-
 UI_URI_PATTERN = re.compile(r"ui://[^\s\"']+")
 
 
 async def render_chart_if_present(
     tool_result_text: str,
     mcp_server,
-) -> cl.Text | None:
+) -> str | None:
     """
     Check tool result text for ui:// resource URIs (MCP Apps).
 
-    If found, fetch the HTML resource and return a cl.Text element with HTML content.
+    If found, fetch the HTML resource and return an iframe HTML string
+    suitable for embedding in a cl.Message (requires unsafe_allow_html=true).
+
     Returns None if no chart URI found or if the server doesn't own the resource.
-
-    Args:
-        tool_result_text: The tool return content as a string
-        mcp_server: Pydantic AI MCP server instance
-
-    Returns:
-        cl.Text element with the chart HTML, or None if no chart found
     """
     match = UI_URI_PATTERN.search(tool_result_text)
     if not match:
@@ -32,33 +24,14 @@ async def render_chart_if_present(
 
     uri = match.group(0)
     try:
-        # Use Pydantic AI's MCP server to read the resource
         html_content = await mcp_server.read_resource(uri)
-        # Return cl.Text with HTML content (Chainlit renders HTML in Text elements)
-        return cl.Text(
-            content=_wrap_chart(html_content),
-            display="inline",
-        )
+        return _wrap_chart(html_content)
     except Exception:
-        # Don't return error element - let the loop try other MCP servers
-        # Only the owning server will have this resource
         return None
 
 
 def _wrap_chart(html: str, height: int = 480) -> str:
-    """
-    Wrap self-contained chart HTML in a sandboxed iframe.
-
-    Chainlit renders cl.Text HTML content directly in the message flow.
-    For MCP Apps sandboxing, use a sandboxed iframe via data URI.
-
-    Args:
-        html: Self-contained HTML from MCP Apps resource
-        height: Height of the iframe in pixels (default: 480)
-
-    Returns:
-        HTML string with iframe wrapper
-    """
+    """Wrap self-contained chart HTML in a sandboxed iframe via data URI."""
     encoded = base64.b64encode(html.encode()).decode()
     return (
         f'<iframe '

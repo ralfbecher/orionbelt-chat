@@ -4,6 +4,7 @@ import json
 import logging
 
 import chainlit as cl
+from chainlit.context import local_steps
 from chainlit.input_widget import Select, TextInput
 from pydantic_ai import Agent
 from pydantic_ai.messages import (
@@ -245,8 +246,15 @@ async def on_message(message: cl.Message):
     # Get message history for multi-turn context
     msg_history = cl.user_session.get("pydantic_history")
 
-    chart_elements: list[cl.Text] = []
+    # The @cl.on_message decorator wraps this handler in an "on_message" Step
+    # via local_steps. All Steps must be children of that wrapper so they render
+    # in chronological order (Steps first, response text last).
+    _parent_steps = local_steps.get() or []
+    _run_step_id = _parent_steps[-1].id if _parent_steps else None
+
+    chart_html_parts: list[str] = []
     response_msg = cl.Message(content="")
+    response_sent = False
     tool_steps: dict[str, cl.Step] = {}  # tool_call_id → Step
     result_messages = None
 
@@ -257,7 +265,7 @@ async def on_message(message: cl.Message):
     )
 
     try:
-        response_sent = False
+        text_parts: list[str] = []
         thinking_step: cl.Step | None = None
 
         async with agent.iter(
@@ -268,25 +276,21 @@ async def on_message(message: cl.Message):
                 node_name = type(node).__name__
                 logger.debug("Agent node: %s", node_name)
 
-                # ── Model request: stream text deltas ───────────────
+                # ── Model request: collect text ────────────────────
                 if Agent.is_model_request_node(node):
                     logger.info("Streaming model request …")
                     # Show a thinking indicator while the model generates
-                    thinking_step = cl.Step(name="Thinking", type="run")
+                    thinking_step = cl.Step(name="Thinking", type="run", parent_id=_run_step_id)
                     await thinking_step.send()
                     async with node.stream(agent_run.ctx) as stream:
                         async for event in stream:
                             if isinstance(event, PartStartEvent) and isinstance(event.part, TextPart):
-                                # First text token arrived — close the thinking step
                                 if thinking_step:
                                     thinking_step.output = ""
                                     await thinking_step.update()
                                     thinking_step = None
                                 if event.part.content:
-                                    if not response_sent:
-                                        await response_msg.send()
-                                        response_sent = True
-                                    await response_msg.stream_token(event.part.content)
+                                    text_parts.append(event.part.content)
                             elif isinstance(event, PartDeltaEvent) and isinstance(event.delta, TextPartDelta):
                                 if thinking_step:
                                     thinking_step.output = ""
@@ -296,10 +300,7 @@ async def on_message(message: cl.Message):
                                 # Filter leaked model thinking tokens (e.g. Gemma)
                                 if "<|channel>" in chunk or "<channel|>" in chunk:
                                     continue
-                                if not response_sent:
-                                    await response_msg.send()
-                                    response_sent = True
-                                await response_msg.stream_token(chunk)
+                                text_parts.append(chunk)
                     # Close thinking step if model produced no text (only tool calls)
                     if thinking_step:
                         thinking_step.output = ""
@@ -324,7 +325,7 @@ async def on_message(message: cl.Message):
 
                                 logger.info("Tool call [%s]: %s(%s)", call_id, tool_name, tool_args)
 
-                                step = cl.Step(name=tool_name, type="tool")
+                                step = cl.Step(name=tool_name, type="tool", parent_id=_run_step_id)
                                 step.input = (
                                     json.dumps(tool_args, indent=2) if isinstance(tool_args, dict) else str(tool_args)
                                 )
@@ -363,12 +364,11 @@ async def on_message(message: cl.Message):
 
         logger.debug("Agent context closed.")
 
-        # Finalise the response message immediately so the UI shows it
-        if not response_sent:
-            await response_msg.send()
-            response_sent = True
-        await response_msg.update()
-        logger.debug("Response message finalised.")
+        # Send the response message AFTER all steps so it appears below them
+        response_msg.content = "".join(text_parts)
+        await response_msg.send()
+        response_sent = True
+        logger.debug("Response message sent.")
 
         # Save message history for next turn
         if result_messages is not None:
@@ -381,17 +381,13 @@ async def on_message(message: cl.Message):
                     if type(part).__name__ == "ToolReturnPart":
                         content = str(getattr(part, "content", ""))
                         for server in agent.toolsets:
-                            chart_el = await render_chart_if_present(content, server)
-                            if chart_el:
-                                chart_elements.append(chart_el)
+                            chart_html = await render_chart_if_present(content, server)
+                            if chart_html:
+                                chart_html_parts.append(chart_html)
                                 break
 
-        if chart_elements:
-            chart_msg = cl.Message(
-                content="Interactive chart:",
-                elements=chart_elements,
-            )
-            await chart_msg.send()
+        for html in chart_html_parts:
+            await cl.Message(content=html).send()
 
     except BaseException as e:
         # BaseException catches asyncio.CancelledError (Python 3.9+)
@@ -408,11 +404,11 @@ async def on_message(message: cl.Message):
         if isinstance(e, (KeyboardInterrupt, SystemExit)):
             raise
     finally:
-        # Always finalise the response message so the UI never shows a
-        # permanent "loading" state.
+        # Ensure the response message is sent even on error so the UI
+        # never shows a permanent "loading" state.
         try:
             if not response_sent:
+                response_msg.content = "".join(text_parts) if text_parts else ""
                 await response_msg.send()
-            await response_msg.update()
         except Exception:
             pass

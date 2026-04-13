@@ -111,90 +111,108 @@
 (function escapeToStop() {
   document.addEventListener("keydown", function (e) {
     if (e.key !== "Escape") return;
-    // Find the Chainlit stop button (appears while streaming)
-    var stopBtn = document.getElementById("stop-button") ||
-      document.querySelector('button[id*="stop"]') ||
-      document.querySelector('button svg title')?.closest("button");
-    // Fallback: look for a button whose accessible label contains "stop"
-    if (!stopBtn) {
-      var buttons = document.querySelectorAll("button");
-      for (var i = 0; i < buttons.length; i++) {
-        var label = (buttons[i].getAttribute("aria-label") || buttons[i].textContent || "").toLowerCase();
-        if (label.includes("stop")) { stopBtn = buttons[i]; break; }
-      }
-    }
+    // Chainlit renders the stop button with id="stop-button" only while generating
+    var stopBtn = document.getElementById("stop-button");
     if (stopBtn) {
+      e.preventDefault();
+      e.stopPropagation();
       stopBtn.click();
     }
-  });
+  }, true);  // capture phase — fire before React
 })();
 
-// Arrow Up in empty input → recall last user message
+// Arrow Up in empty input → recall last user message (shell-style history)
 (function arrowUpRecall() {
   var messageHistory = [];
   var historyIndex = -1;
+  var savedInput = "";  // stash current input when entering history mode
 
-  // Capture user message right before Enter submits (keydown fires before React)
-  document.addEventListener("keydown", function (e) {
-    if (e.key === "Enter" && !e.shiftKey) {
-      var textarea = document.querySelector("textarea");
-      if (textarea && textarea.value.trim()) {
-        messageHistory.push(textarea.value.trim());
-        historyIndex = -1;
-      }
-    }
-  }, true);
-
-  // Also capture when the send button is clicked
-  document.addEventListener("click", function (e) {
-    var btn = e.target.closest("button");
-    if (!btn) return;
-    var label = (btn.getAttribute("aria-label") || btn.id || "").toLowerCase();
-    if (label.includes("send") || btn.id === "send-button") {
-      var textarea = document.querySelector("textarea");
-      if (textarea && textarea.value.trim()) {
-        messageHistory.push(textarea.value.trim());
-        historyIndex = -1;
-      }
-    }
-  }, true);
-
-  function setTextareaValue(textarea, text) {
-    var nativeSetter = Object.getOwnPropertyDescriptor(
-      window.HTMLTextAreaElement.prototype, "value"
-    ).set;
-    nativeSetter.call(textarea, text);
-    textarea.dispatchEvent(new Event("input", { bubbles: true }));
-    textarea.selectionStart = textarea.selectionEnd = text.length;
-    textarea.focus();
+  // Find the Chainlit chat input (id="chat-input", renders as <textarea>)
+  function getInput() {
+    return document.getElementById("chat-input");
   }
 
-  // Arrow Up / Arrow Down to navigate message history
+  function pushMessage(text) {
+    text = (text || "").trim();
+    if (!text) return;
+    // Deduplicate consecutive identical messages
+    if (messageHistory.length && messageHistory[messageHistory.length - 1] === text) return;
+    messageHistory.push(text);
+    historyIndex = -1;
+    savedInput = "";
+  }
+
+  // Set textarea value via execCommand so React's controlled component
+  // picks up the change through normal browser input handling.
+  function setInputValue(el, text) {
+    el.focus();
+    // Select all existing text, then replace with new text
+    el.select();
+    // execCommand('insertText') triggers native beforeinput+input events
+    // that React handles identically to real user typing
+    if (!document.execCommand("insertText", false, text)) {
+      // Fallback: native setter + _valueTracker reset
+      var nativeSetter = Object.getOwnPropertyDescriptor(
+        window.HTMLTextAreaElement.prototype, "value"
+      ).set;
+      var tracker = el._valueTracker;
+      if (tracker) tracker.setValue(el.value);
+      nativeSetter.call(el, text);
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+    // Place cursor at end
+    el.selectionStart = el.selectionEnd = text.length;
+  }
+
+  // Capture user message right before Enter submits (capture phase fires before React)
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Enter" && !e.shiftKey) {
+      var el = getInput();
+      if (el) pushMessage(el.value);
+    }
+  }, true);
+
+  // Also capture when the send button (id="chat-submit") is clicked
+  document.addEventListener("click", function (e) {
+    var btn = e.target.closest("#chat-submit");
+    if (btn) {
+      var el = getInput();
+      if (el) pushMessage(el.value);
+    }
+  }, true);
+
+  // Arrow Up / Arrow Down to navigate message history (capture phase)
   document.addEventListener("keydown", function (e) {
     if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
-    var textarea = document.querySelector("textarea");
-    if (!textarea || document.activeElement !== textarea) return;
+    var el = getInput();
+    if (!el || document.activeElement !== el) return;
     if (messageHistory.length === 0) return;
 
     if (e.key === "ArrowUp") {
       // Only start recall when the input is empty or already in recall mode
-      if (textarea.value.trim() !== "" && historyIndex === -1) return;
+      if (el.value.trim() !== "" && historyIndex === -1) return;
       e.preventDefault();
+      e.stopImmediatePropagation();
       if (historyIndex === -1) {
+        // Save whatever is currently typed so Arrow Down can restore it
+        savedInput = el.value;
         historyIndex = messageHistory.length - 1;
       } else if (historyIndex > 0) {
         historyIndex--;
       }
-      setTextareaValue(textarea, messageHistory[historyIndex]);
+      setInputValue(el, messageHistory[historyIndex]);
     } else if (e.key === "ArrowDown" && historyIndex !== -1) {
       e.preventDefault();
+      e.stopImmediatePropagation();
       if (historyIndex < messageHistory.length - 1) {
         historyIndex++;
-        setTextareaValue(textarea, messageHistory[historyIndex]);
+        setInputValue(el, messageHistory[historyIndex]);
       } else {
+        // Past the newest entry → restore whatever the user had typed
         historyIndex = -1;
-        setTextareaValue(textarea, "");
+        setInputValue(el, savedInput);
+        savedInput = "";
       }
     }
-  });
+  }, true);
 })();
