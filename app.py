@@ -410,16 +410,43 @@ async def on_message(message: cl.Message):
         # BaseException catches asyncio.CancelledError (Python 3.9+)
         # which Chainlit may raise on WebSocket disconnect / timeout.
         logger.exception("Error in message handler")
-        if not isinstance(e, (KeyboardInterrupt, SystemExit)):
-            try:
+        if isinstance(e, (KeyboardInterrupt, SystemExit)):
+            raise
+
+        # Detect MCP session termination and attempt automatic reconnection
+        err_chain = str(e) + " " + str(getattr(e, "__cause__", ""))
+        is_mcp_session_error = any(
+            phrase in err_chain
+            for phrase in ("Session terminated", "session expired", "McpError")
+        )
+
+        try:
+            if is_mcp_session_error:
+                logger.warning("MCP session lost — attempting reconnection …")
+                await cl.Message(
+                    content="MCP server connection lost. Reconnecting …",
+                    author="System",
+                ).send()
+                provider = cl.user_session.get("provider")
+                model = cl.user_session.get("model")
+                if await _init_agent(provider, model):
+                    mcp_info = cl.user_session.get("mcp_info", "")
+                    await cl.Message(
+                        content=f"Reconnected. {mcp_info}\n\nPlease resend your message.",
+                        author="System",
+                    ).send()
+                else:
+                    await cl.Message(
+                        content="Reconnection failed. Check that MCP servers are running.",
+                        author="System",
+                    ).send()
+            else:
                 await cl.Message(
                     content=f"Error: {e}",
                     author="System",
                 ).send()
-            except Exception:
-                pass  # UI may already be gone
-        if isinstance(e, (KeyboardInterrupt, SystemExit)):
-            raise
+        except Exception:
+            pass  # UI may already be gone
     finally:
         # Ensure the response message is sent even on error so the UI
         # never shows a permanent "loading" state.
