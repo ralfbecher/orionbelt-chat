@@ -21,7 +21,9 @@ class Settings(BaseSettings):
 
     # Direct provider keys (optional, bypass OpenRouter)
     anthropic_api_key: str = ""
+    anthropic_default_model: str = "claude-sonnet-4-6"
     openai_api_key: str = ""
+    openai_default_model: str = "gpt-4o"
 
     # ── Default provider on startup ────────────────────────────
     # Values: "openrouter" | "mlx" | "ollama" | "anthropic" | "openai"

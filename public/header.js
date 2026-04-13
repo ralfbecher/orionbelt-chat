@@ -106,3 +106,75 @@
     });
   }).observe(document.body, { childList: true, subtree: true, characterData: true });
 })();
+
+// Escape key → click the stop button to cancel generation
+(function escapeToStop() {
+  document.addEventListener("keydown", function (e) {
+    if (e.key !== "Escape") return;
+    // Find the Chainlit stop button (appears while streaming)
+    var stopBtn = document.getElementById("stop-button") ||
+      document.querySelector('button[id*="stop"]') ||
+      document.querySelector('button svg title')?.closest("button");
+    // Fallback: look for a button whose accessible label contains "stop"
+    if (!stopBtn) {
+      var buttons = document.querySelectorAll("button");
+      for (var i = 0; i < buttons.length; i++) {
+        var label = (buttons[i].getAttribute("aria-label") || buttons[i].textContent || "").toLowerCase();
+        if (label.includes("stop")) { stopBtn = buttons[i]; break; }
+      }
+    }
+    if (stopBtn) {
+      stopBtn.click();
+    }
+  });
+})();
+
+// Arrow Up in empty input → recall last user message
+(function arrowUpRecall() {
+  var lastUserMessage = "";
+
+  // Capture each user message when sent
+  new MutationObserver(function () {
+    // User messages have data-message-author="user" or similar markers
+    var userMsgs = document.querySelectorAll('[class*="userMessage"], [data-message-author="user"]');
+    if (userMsgs.length === 0) {
+      // Fallback: grab the last message that appears on the right side
+      var allMsgs = document.querySelectorAll(".markdown-body, [class*=\"message\"]");
+      // Not reliable enough alone, so also track via keydown
+    }
+    if (userMsgs.length > 0) {
+      var last = userMsgs[userMsgs.length - 1];
+      var text = (last.textContent || "").trim();
+      if (text) lastUserMessage = text;
+    }
+  }).observe(document.body, { childList: true, subtree: true });
+
+  // Also capture via form submission / Enter key
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Enter" && !e.shiftKey) {
+      var textarea = document.querySelector("textarea");
+      if (textarea && textarea.value.trim()) {
+        lastUserMessage = textarea.value.trim();
+      }
+    }
+  }, true);
+
+  // Arrow Up when input is empty → fill with last message
+  document.addEventListener("keydown", function (e) {
+    if (e.key !== "ArrowUp") return;
+    var textarea = document.querySelector("textarea");
+    if (!textarea || document.activeElement !== textarea) return;
+    // Only recall when the input is empty
+    if (textarea.value.trim() !== "") return;
+    if (!lastUserMessage) return;
+    e.preventDefault();
+    // Set value via native input setter to trigger React state update
+    var nativeSetter = Object.getOwnPropertyDescriptor(
+      window.HTMLTextAreaElement.prototype, "value"
+    ).set;
+    nativeSetter.call(textarea, lastUserMessage);
+    textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    // Move cursor to end
+    textarea.selectionStart = textarea.selectionEnd = lastUserMessage.length;
+  });
+})();

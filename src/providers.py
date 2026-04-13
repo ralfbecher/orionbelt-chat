@@ -136,7 +136,7 @@ def default_model_for(provider: str) -> str:
         "openrouter": settings.openrouter_default_model,
         "mlx": settings.mlx_default_model,
         "ollama": settings.ollama_default_model,
-        "anthropic": "claude-sonnet-4-6",
-        "openai": "gpt-4o",
+        "anthropic": settings.anthropic_default_model,
+        "openai": settings.openai_default_model,
     }
     return defaults.get(provider, "")

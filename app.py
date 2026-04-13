@@ -91,14 +91,18 @@ async def on_start():
         else:
             mcp_info = "No MCP servers configured."
 
-        await cl.Message(
+        cl.user_session.set("mcp_info", mcp_info)
+
+        status_msg = cl.Message(
             content=(
                 f"**OrionBelt Analytics Assistant** ready.\n\n"
                 f"Provider: `{provider}` | Model: `{model}`\n\n"
                 f"{mcp_info}\n\n"
                 f"Ask me anything about your data."
             )
-        ).send()
+        )
+        await status_msg.send()
+        cl.user_session.set("status_msg", status_msg)
 
 
 async def _init_agent(provider: str, model: str) -> bool:
@@ -133,6 +137,12 @@ async def _init_agent(provider: str, model: str) -> bool:
         return False
 
 
+@cl.on_stop
+async def on_stop():
+    """Called when the user clicks the stop button or presses Escape."""
+    logger.info("User stopped the current task.")
+
+
 @cl.on_chat_end
 async def on_end():
     """Clean up MCP server subprocesses when session ends."""
@@ -154,7 +164,7 @@ async def on_settings_update(settings_values: dict):
     Rebuilds the agent with the new model.
     """
     provider = settings_values.get("provider", settings.default_provider)
-    custom_model = settings_values.get("custom_model", "").strip()
+    custom_model = (settings_values.get("custom_model") or "").strip()
     selected_model = settings_values.get("model", default_model_for(provider))
     model = custom_model if custom_model else selected_model
 
@@ -171,9 +181,21 @@ async def on_settings_update(settings_values: dict):
 
     if init_success:
         await cl.Message(
-            content=f"✅ Now using `{model}` via `{provider}`.",
+            content=f"Now using `{model}` via `{provider}`.",
             author="System",
         ).send()
+
+        # Update the header status message
+        status_msg = cl.user_session.get("status_msg")
+        mcp_info = cl.user_session.get("mcp_info", "")
+        if status_msg:
+            status_msg.content = (
+                f"**OrionBelt Analytics Assistant** ready.\n\n"
+                f"Provider: `{provider}` | Model: `{model}`\n\n"
+                f"{mcp_info}\n\n"
+                f"Ask me anything about your data."
+            )
+            await status_msg.update()
 
 
 # ── Message handler ────────────────────────────────────────────────────────
