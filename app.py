@@ -252,7 +252,7 @@ async def on_message(message: cl.Message):
     _parent_steps = local_steps.get() or []
     _run_step_id = _parent_steps[-1].id if _parent_steps else None
 
-    chart_html_parts: list[str] = []
+    chart_elements: list[cl.Plotly] = []
     response_msg = cl.Message(content="")
     response_sent = False
     tool_steps: dict[str, cl.Step] = {}  # tool_call_id → Step
@@ -381,13 +381,16 @@ async def on_message(message: cl.Message):
                     if type(part).__name__ == "ToolReturnPart":
                         content = str(getattr(part, "content", ""))
                         for server in agent.toolsets:
-                            chart_html = await render_chart_if_present(content, server)
-                            if chart_html:
-                                chart_html_parts.append(chart_html)
+                            chart_el = await render_chart_if_present(content, server)
+                            if chart_el:
+                                chart_elements.append(chart_el)
                                 break
 
-        for html in chart_html_parts:
-            await cl.Message(content=html).send()
+        if chart_elements:
+            await cl.Message(
+                content="",
+                elements=chart_elements,
+            ).send()
 
     except BaseException as e:
         # BaseException catches asyncio.CancelledError (Python 3.9+)
