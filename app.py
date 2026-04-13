@@ -5,7 +5,7 @@ import logging
 
 import chainlit as cl
 from chainlit.input_widget import Select, TextInput
-from pydantic_ai import AgentRunResultEvent
+from pydantic_ai import Agent
 from pydantic_ai.messages import (
     FunctionToolCallEvent,
     FunctionToolResultEvent,
@@ -16,6 +16,12 @@ from pydantic_ai.messages import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Maximum characters to display in a Chainlit tool-call step output.
+# Large MCP tool responses (e.g. SQL query results with many rows) can
+# overwhelm the WebSocket/browser and stall the agent loop.  The model
+# still receives the full content via pydantic-ai's internal history.
+STEP_OUTPUT_LIMIT = 10_000
 
 from src.agent import make_agent
 from src.chart_renderer import render_chart_if_present
@@ -176,8 +182,12 @@ async def on_settings_update(settings_values: dict):
 @cl.on_message
 async def on_message(message: cl.Message):
     """
-    Main handler. Runs the Pydantic AI agent with event streaming,
-    shows tool call steps in the UI, and injects charts inline.
+    Main handler. Iterates the Pydantic AI agent graph node-by-node,
+    streaming text deltas and showing tool call steps in the Chainlit UI.
+
+    Uses agent.iter() instead of run_stream_events() to avoid the anyio
+    rendezvous-channel backpressure that can stall the agent after many
+    tool calls.
     """
     agent = cl.user_session.get("agent")
     if agent is None:
@@ -195,66 +205,113 @@ async def on_message(message: cl.Message):
     active_step: cl.Step | None = None
     result_messages = None
 
+    logger.info(
+        "Message received (%d history messages): %.100s",
+        len(msg_history) if msg_history else 0,
+        message.content,
+    )
+
     try:
         await response_msg.send()
 
-        async for event in agent.run_stream_events(
+        thinking_step: cl.Step | None = None
+
+        async with agent.iter(
             message.content,
             message_history=msg_history,
-        ):
-            # ── Final result: capture messages for history + charts ──
-            if isinstance(event, AgentRunResultEvent):
-                result_messages = event.result.all_messages()
-                continue
+        ) as agent_run:
+            async for node in agent_run:
+                node_name = type(node).__name__
+                logger.debug("Agent node: %s", node_name)
 
-            # ── Tool call start ──────────────────────────────────────
-            if isinstance(event, FunctionToolCallEvent):
-                tool_name = event.part.tool_name
-                tool_args = event.part.args
-                if isinstance(tool_args, str):
-                    try:
-                        tool_args = json.loads(tool_args)
-                    except (json.JSONDecodeError, TypeError):
-                        pass
+                # ── Model request: stream text deltas ───────────────
+                if Agent.is_model_request_node(node):
+                    logger.info("Streaming model request …")
+                    # Show a thinking indicator while the model generates
+                    thinking_step = cl.Step(name="Thinking", type="run")
+                    await thinking_step.send()
+                    async with node.stream(agent_run.ctx) as stream:
+                        async for event in stream:
+                            if isinstance(event, PartStartEvent) and isinstance(event.part, TextPart):
+                                # First text token arrived — close the thinking step
+                                if thinking_step:
+                                    thinking_step.output = ""
+                                    await thinking_step.update()
+                                    thinking_step = None
+                                if event.part.content:
+                                    await response_msg.stream_token(event.part.content)
+                            elif isinstance(event, PartDeltaEvent) and isinstance(event.delta, TextPartDelta):
+                                if thinking_step:
+                                    thinking_step.output = ""
+                                    await thinking_step.update()
+                                    thinking_step = None
+                                chunk = event.delta.content_delta
+                                # Filter leaked model thinking tokens (e.g. Gemma)
+                                if "<|channel>" in chunk or "<channel|>" in chunk:
+                                    continue
+                                await response_msg.stream_token(chunk)
+                    # Close thinking step if model produced no text (only tool calls)
+                    if thinking_step:
+                        thinking_step.output = ""
+                        await thinking_step.update()
+                        thinking_step = None
+                    logger.info("Model request complete.")
 
-                logger.info("Tool call: %s(%s)", tool_name, tool_args)
+                # ── Tool calls: show as Chainlit steps ──────────────
+                elif Agent.is_call_tools_node(node):
+                    logger.info("Processing tool calls …")
+                    async with node.stream(agent_run.ctx) as stream:
+                        async for event in stream:
+                            if isinstance(event, FunctionToolCallEvent):
+                                tool_name = event.part.tool_name
+                                tool_args = event.part.args
+                                if isinstance(tool_args, str):
+                                    try:
+                                        tool_args = json.loads(tool_args)
+                                    except (json.JSONDecodeError, TypeError):
+                                        pass
 
-                active_step = cl.Step(name=tool_name, type="tool")
-                active_step.input = json.dumps(tool_args, indent=2) if isinstance(tool_args, dict) else str(tool_args)
-                await active_step.send()
-                continue
+                                logger.info("Tool call: %s(%s)", tool_name, tool_args)
 
-            # ── Tool call result ─────────────────────────────────────
-            if isinstance(event, FunctionToolResultEvent):
-                result_content = str(event.result.content)
-                logger.info(
-                    "Tool result: %s → %s",
-                    event.result.tool_name,
-                    result_content[:200],
-                )
+                                active_step = cl.Step(name=tool_name, type="tool")
+                                active_step.input = (
+                                    json.dumps(tool_args, indent=2) if isinstance(tool_args, dict) else str(tool_args)
+                                )
+                                await active_step.send()
 
-                if active_step:
-                    active_step.output = result_content
-                    await active_step.update()
-                    active_step = None
-                continue
+                            elif isinstance(event, FunctionToolResultEvent):
+                                result_content = str(event.result.content)
+                                logger.info(
+                                    "Tool result (%d chars): %s → %s",
+                                    len(result_content),
+                                    event.result.tool_name,
+                                    result_content[:200],
+                                )
 
-            # ── Text streaming ───────────────────────────────────────
-            if isinstance(event, PartStartEvent) and isinstance(event.part, TextPart):
-                if event.part.content:
-                    await response_msg.stream_token(event.part.content)
-                continue
+                                if active_step:
+                                    if len(result_content) > STEP_OUTPUT_LIMIT:
+                                        active_step.output = (
+                                            result_content[:STEP_OUTPUT_LIMIT]
+                                            + f"\n\n… (truncated — {len(result_content):,} chars total)"
+                                        )
+                                    else:
+                                        active_step.output = result_content
+                                    await active_step.update()
+                                    active_step = None
+                    logger.info("Tool calls complete.")
 
-            if isinstance(event, PartDeltaEvent) and isinstance(event.delta, TextPartDelta):
-                chunk = event.delta.content_delta
-                # Filter leaked model thinking tokens (e.g. Gemma)
-                if "<|channel>" in chunk or "<channel|>" in chunk:
-                    continue
-                await response_msg.stream_token(chunk)
-                continue
+            # Capture full message history while the run context is still open
+            if agent_run.result is not None:
+                result_messages = agent_run.all_messages()
+                logger.info("Agent run finished — %d messages in history.", len(result_messages))
+            else:
+                logger.warning("Agent run ended without a result.")
 
-        # Finalise streaming
+        logger.debug("Agent context closed.")
+
+        # Finalise the response message immediately so the UI shows it
         await response_msg.update()
+        logger.debug("Response message finalised.")
 
         # Save message history for next turn
         if result_messages is not None:
@@ -279,9 +336,24 @@ async def on_message(message: cl.Message):
             )
             await chart_msg.send()
 
-    except Exception as e:
+    except BaseException as e:
+        # BaseException catches asyncio.CancelledError (Python 3.9+)
+        # which Chainlit may raise on WebSocket disconnect / timeout.
         logger.exception("Error in message handler")
-        await cl.Message(
-            content=f"Error: {e}",
-            author="System",
-        ).send()
+        if not isinstance(e, (KeyboardInterrupt, SystemExit)):
+            try:
+                await cl.Message(
+                    content=f"Error: {e}",
+                    author="System",
+                ).send()
+            except Exception:
+                pass  # UI may already be gone
+        if isinstance(e, (KeyboardInterrupt, SystemExit)):
+            raise
+    finally:
+        # Always finalise the response message so the UI never shows a
+        # permanent "loading" state.
+        try:
+            await response_msg.update()
+        except Exception:
+            pass
