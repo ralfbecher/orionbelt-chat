@@ -1,87 +1,73 @@
-"""Chart rendering — detects Plotly figure JSON in MCP tool results."""
+"""Chart rendering for FastMCP Apps ui:// resources.
+
+Detects ui:// URIs in MCP tool results, fetches the resource HTML,
+extracts Plotly figure data, and renders it natively via Chainlit.
+"""
 
 import json
 import logging
 import re
+from dataclasses import dataclass
+from typing import ClassVar
 
-import chainlit as cl
+from chainlit.element import Element, ElementType
 
 logger = logging.getLogger(__name__)
 
-# Matches a ui:// resource URI in tool result text (MCP Apps pattern)
 UI_URI_PATTERN = re.compile(r"ui://[^\s\"']+")
 
 
-def _try_parse_plotly_figure(text: str):
-    """
-    Try to extract a Plotly figure dict from tool result text.
+@dataclass
+class PlotlyChart(Element):
+    """Lightweight Plotly element — sends raw JSON to the Chainlit frontend
+    which already bundles Plotly.js.  No plotly Python package required."""
 
-    Looks for JSON objects containing 'traces' or 'data' + 'layout' keys,
-    which indicate a Plotly figure specification.
+    type: ClassVar[ElementType] = "plotly"
 
-    Returns a plotly.graph_objects.Figure or None.
+    def __post_init__(self):
+        self.mime = "application/json"
+        super().__post_init__()
+
+
+def _extract_plotly_json(text: str) -> str | None:
+    """Extract a Plotly figure dict from text and return it as a JSON string.
+
+    Scans for JSON objects containing ``traces`` (or ``data``) + ``layout``.
+    Normalises to ``{"data": [...], "layout": {...}}`` for Plotly.js.
     """
-    # Find JSON-like blocks in the text
     for match in re.finditer(r"\{", text):
-        start = match.start()
-        # Try parsing JSON from this position
         try:
-            obj, _ = json.JSONDecoder().raw_decode(text, start)
+            obj, _ = json.JSONDecoder().raw_decode(text, match.start())
         except (json.JSONDecodeError, ValueError):
             continue
-
         if not isinstance(obj, dict):
             continue
-
-        # Plotly figure: has "traces" or "data" key with "layout"
         traces = obj.get("traces") or obj.get("data")
-        layout = obj.get("layout")
         if traces and isinstance(traces, list):
-            try:
-                from plotly import graph_objects as go
-
-                fig = go.Figure(data=traces, layout=layout)
-                fig.layout.autosize = True
-                fig.layout.width = None
-                fig.layout.height = None
-                return fig
-            except Exception as e:
-                logger.debug("Failed to create Plotly figure: %s", e)
-                continue
-
+            return json.dumps({"data": traces, "layout": obj.get("layout", {})})
     return None
 
 
 async def render_chart_if_present(
     tool_result_text: str,
     mcp_server,
-) -> cl.Plotly | None:
+) -> PlotlyChart | None:
+    """Detect a ``ui://`` resource URI (FastMCP Apps) in tool result text.
+
+    Fetches the resource via the MCP server, extracts Plotly figure data,
+    and returns a :class:`PlotlyChart` element for native rendering.
     """
-    Check tool result text for Plotly figure data.
-
-    First tries to parse Plotly JSON directly from the tool result text.
-    Falls back to fetching a ui:// resource URI (MCP Apps pattern).
-
-    Returns a cl.Plotly element or None.
-    """
-    # Strategy 1: Parse Plotly figure JSON from the tool result text
-    fig = _try_parse_plotly_figure(tool_result_text)
-    if fig:
-        return cl.Plotly(name="chart", figure=fig, display="inline")
-
-    # Strategy 2: Fetch HTML from ui:// resource and extract Plotly data
     match = UI_URI_PATTERN.search(tool_result_text)
     if not match:
         return None
 
     uri = match.group(0)
     try:
-        html_content = await mcp_server.read_resource(uri)
-        # Try to extract Plotly JSON from the HTML (e.g. Plotly.newPlot(..., data))
-        fig = _try_parse_plotly_figure(html_content)
-        if fig:
-            return cl.Plotly(name="chart", figure=fig, display="inline")
-    except Exception:
-        pass
+        resource_content = await mcp_server.read_resource(uri)
+        fig_json = _extract_plotly_json(resource_content)
+        if fig_json:
+            return PlotlyChart(name="chart", content=fig_json, display="inline")
+    except Exception as e:
+        logger.debug("Failed to render chart from %s: %s", uri, e)
 
     return None

@@ -252,7 +252,7 @@ async def on_message(message: cl.Message):
     _parent_steps = local_steps.get() or []
     _run_step_id = _parent_steps[-1].id if _parent_steps else None
 
-    chart_elements: list[cl.Plotly] = []
+    chart_elements: list = []
     response_msg = cl.Message(content="")
     response_sent = False
     tool_steps: dict[str, cl.Step] = {}  # tool_call_id → Step
