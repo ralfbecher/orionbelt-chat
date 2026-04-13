@@ -257,8 +257,7 @@ async def on_message(message: cl.Message):
     )
 
     try:
-        await response_msg.send()
-
+        response_sent = False
         thinking_step: cl.Step | None = None
 
         async with agent.iter(
@@ -284,6 +283,9 @@ async def on_message(message: cl.Message):
                                     await thinking_step.update()
                                     thinking_step = None
                                 if event.part.content:
+                                    if not response_sent:
+                                        await response_msg.send()
+                                        response_sent = True
                                     await response_msg.stream_token(event.part.content)
                             elif isinstance(event, PartDeltaEvent) and isinstance(event.delta, TextPartDelta):
                                 if thinking_step:
@@ -294,6 +296,9 @@ async def on_message(message: cl.Message):
                                 # Filter leaked model thinking tokens (e.g. Gemma)
                                 if "<|channel>" in chunk or "<channel|>" in chunk:
                                     continue
+                                if not response_sent:
+                                    await response_msg.send()
+                                    response_sent = True
                                 await response_msg.stream_token(chunk)
                     # Close thinking step if model produced no text (only tool calls)
                     if thinking_step:
@@ -359,6 +364,9 @@ async def on_message(message: cl.Message):
         logger.debug("Agent context closed.")
 
         # Finalise the response message immediately so the UI shows it
+        if not response_sent:
+            await response_msg.send()
+            response_sent = True
         await response_msg.update()
         logger.debug("Response message finalised.")
 
@@ -403,6 +411,8 @@ async def on_message(message: cl.Message):
         # Always finalise the response message so the UI never shows a
         # permanent "loading" state.
         try:
+            if not response_sent:
+                await response_msg.send()
             await response_msg.update()
         except Exception:
             pass

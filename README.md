@@ -10,8 +10,8 @@
 [![Version](https://img.shields.io/badge/version-0.5.0-brightgreen.svg)](https://github.com/ralfbecher/orionbelt-chat)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![License: BSL 1.1](https://img.shields.io/badge/License-BSL_1.1-orange.svg)](https://github.com/ralfbecher/orionbelt-chat/blob/main/LICENSE)
-[![Chainlit](https://img.shields.io/badge/Chainlit-2.0+-blue)](https://chainlit.io)
-[![Pydantic AI](https://img.shields.io/badge/Pydantic_AI-0.0.60+-blue)](https://ai.pydantic.dev)
+[![Chainlit](https://img.shields.io/badge/Chainlit-2.10+-blue)](https://chainlit.io)
+[![Pydantic AI](https://img.shields.io/badge/Pydantic_AI-1.77+-blue)](https://ai.pydantic.dev)
 
 [![OpenRouter](https://img.shields.io/badge/OpenRouter-300%2B_Models-blueviolet)](https://openrouter.ai)
 [![MLX](https://img.shields.io/badge/MLX-Apple_Silicon-black)](https://github.com/ml-explore/mlx)
@@ -34,8 +34,9 @@ A production-ready chat application that connects to OrionBelt Analytics and Ori
 ### 🔧 MCP Integration
 
 - **Dual MCP server support** - Connect to Analytics and Semantic Layer simultaneously
+- **Graceful degradation** - One unreachable server won't block the app; agent starts with available servers
+- **Flexible transport** - Stdio (local subprocess) or Streamable HTTP (remote) per server
 - **Tool visibility** - Collapsible steps show tool calls with arguments and results
-- **Streaming responses** - Real-time token streaming with visual feedback
 - **Multi-turn context** - Full conversation history management with Pydantic AI
 
 ### 📊 Interactive Charts
@@ -48,14 +49,17 @@ A production-ready chat application that connects to OrionBelt Analytics and Ori
 ### ⚡ Real-Time Streaming
 
 - **Token-by-token streaming** - Smooth response rendering as model generates
-- **Tool call tracking** - Visual feedback for each MCP tool invocation
+- **Thinking indicator** - Visual spinner while the model processes before responding
+- **Tool call tracking** - Visual feedback for each MCP tool invocation with correct result matching
+- **Stop generation** - Click the stop button or press **Escape** to cancel
 - **Error handling** - Graceful failures with clear error messages
-- **Progress indicators** - Loading states during long-running operations
 
 ### 🎨 Chainlit UI
 
-- **Settings panel** - Switch providers and models on the fly
+- **Settings panel** - Switch providers and models on the fly; header updates live
 - **Custom model input** - Override default models with specific versions
+- **Customizable system prompt** - Edit `system_prompt.md` or set `SYSTEM_PROMPT_FILE` env var
+- **Message recall** - Press **Arrow Up** in empty input to recall previous messages
 - **Message history** - Persistent conversation context across sessions
 - **Responsive design** - Works on desktop and mobile browsers
 
@@ -94,7 +98,23 @@ OPENROUTER_DEFAULT_MODEL=anthropic/claude-sonnet-4-5
 DEFAULT_PROVIDER=openrouter
 ```
 
-**Option 2: MLX local (Apple Silicon)**
+**Option 2: Anthropic direct**
+
+```bash
+ANTHROPIC_API_KEY=sk-ant-...
+ANTHROPIC_DEFAULT_MODEL=claude-sonnet-4-6   # or claude-opus-4-6
+DEFAULT_PROVIDER=anthropic
+```
+
+**Option 3: OpenAI direct**
+
+```bash
+OPENAI_API_KEY=sk-...
+OPENAI_DEFAULT_MODEL=gpt-4o
+DEFAULT_PROVIDER=openai
+```
+
+**Option 4: MLX local (Apple Silicon)**
 
 ```bash
 # Start mlx-openai-server first:
@@ -108,7 +128,7 @@ MLX_DEFAULT_MODEL=mlx-community/Qwen2.5-14B-Instruct-4bit
 DEFAULT_PROVIDER=mlx
 ```
 
-**Option 3: Ollama local (cross-platform)**
+**Option 5: Ollama local (cross-platform)**
 
 ```bash
 # Start Ollama first: ollama serve
@@ -119,9 +139,17 @@ DEFAULT_PROVIDER=ollama
 **MCP Server Paths:**
 
 ```bash
-# Ensure these point to your local repos
+# Each can be a local directory (stdio) or HTTP(S) URL (Streamable HTTP):
 ANALYTICS_SERVER_DIR=../orionbelt-analytics
 SEMANTIC_LAYER_SERVER_DIR=../orionbelt-semantic-layer-mcp
+# Remote example: ANALYTICS_SERVER_DIR=https://analytics.example.com/mcp
+```
+
+**System Prompt (optional):**
+
+```bash
+# Override the default system prompt file (defaults to system_prompt.md)
+# SYSTEM_PROMPT_FILE=~/my_custom_prompt.md
 ```
 
 ### Run
@@ -182,13 +210,13 @@ Create an OBML model for customer analytics with metrics for revenue, order coun
 │  └──────────┘         └──────────────────────────────────┘   │
 └──────────────────────────────────────────────────────────────┘
          │                      │
-         │                      ├──> orionbelt-analytics (MCP stdio)
+         │                      ├──> orionbelt-analytics (MCP stdio or HTTP)
          │                      │    - Schema analysis
          │                      │    - Ontology generation
          │                      │    - SQL execution
          │                      │    - Interactive charts
          │                      │
-         │                      └──> orionbelt-semantic-layer (MCP stdio)
+         │                      └──> orionbelt-semantic-layer (MCP stdio or HTTP)
          │                           - OBML model management
          │                           - Semantic query compilation
          │                           - Guaranteed-correct SQL
@@ -198,9 +226,9 @@ Create an OBML model for customer analytics with metrics for revenue, order coun
 
 **Key Components:**
 
-- **Chainlit 2.0+** - Chat UI framework with streaming, steps, and settings
-- **Pydantic AI 0.0.60+** - Agent framework with MCP client integration
-- **MCP Stdio Transport** - Subprocess-based MCP server communication
+- **Chainlit 2.10+** - Chat UI framework with streaming, steps, and settings
+- **Pydantic AI 1.77+** - Agent framework with node-by-node iteration (`agent.iter()`)
+- **MCP Transport** - Stdio (local subprocess) or Streamable HTTP (remote) per server
 - **Chart Renderer** - MCP Apps ui:// resource handler with iframe sandboxing
 
 ## 🛠️ Development
@@ -226,10 +254,28 @@ uv run ruff check --fix
 - **Access**: 300+ models via single API
 - **Reliability**: Best tool-calling support across vendors
 - **Recommended models**:
-  - `anthropic/claude-sonnet-4-5` - Best reasoning and tool use
-  - `anthropic/claude-opus-4` - Maximum intelligence
+  - `anthropic/claude-sonnet-4-5` - Best balance of speed and reasoning
+  - `anthropic/claude-opus-4-5` - Maximum intelligence
   - `google/gemini-2.5-pro` - Fast and cost-effective
 - **Setup**: Get API key at [openrouter.ai](https://openrouter.ai)
+
+### Anthropic (direct)
+
+- **Access**: Direct API, no intermediary
+- **Available models**:
+  - `claude-sonnet-4-6` - Fast, excellent tool use (default)
+  - `claude-opus-4-6` - Maximum intelligence
+  - `claude-haiku-4-5-20251001` - Fastest, lowest cost
+- **Setup**: Get API key at [console.anthropic.com](https://console.anthropic.com)
+
+### OpenAI (direct)
+
+- **Access**: Direct API, no intermediary
+- **Available models**:
+  - `gpt-4o` - Best balance (default)
+  - `gpt-4o-mini` - Fast and cost-effective
+  - `o3-mini` - Reasoning model
+- **Setup**: Get API key at [platform.openai.com](https://platform.openai.com)
 
 ### MLX (Apple Silicon)
 
@@ -255,14 +301,16 @@ uv run ruff check --fix
 
 ### MCP servers not connecting
 
-**Symptom:** Agent initialization fails on startup
+**Symptom:** Status message shows "Failed to connect" for one or more servers
+
+The app starts even when some servers are unreachable — it will show which connected and which failed.
 
 **Solutions:**
 
 - Ensure `ANALYTICS_SERVER_DIR` and `SEMANTIC_LAYER_SERVER_DIR` point to correct paths
-- Check that both repos have dependencies installed (`uv sync`)
-- Verify both MCP servers can start independently (`uv run server.py`)
-- Check for port conflicts if using HTTP transport (future feature)
+- For local (stdio): check that repos have dependencies installed (`uv sync`)
+- For remote (HTTP): verify the URL is reachable and the server is running
+- Verify MCP servers can start independently (`uv run server.py`)
 
 ### Charts not rendering
 
@@ -288,14 +336,15 @@ uv run ruff check --fix
 
 ### Streaming stops or hangs
 
-**Symptom:** Response stops mid-generation
+**Symptom:** Response stops mid-generation or "Thinking" indicator stays visible
 
 **Solutions:**
 
+- Press **Escape** or click the stop button to cancel, then retry
 - Check MCP server logs for errors
-- Verify tool calls are completing successfully
+- Verify tool calls are completing successfully (expand steps in the UI)
 - Increase timeout settings if using slow local models
-- Restart both MCP servers and the chat app
+- Check the server console for detailed logs (each node transition is logged)
 
 ## 📄 License
 
