@@ -2,38 +2,27 @@
 
 from pydantic_ai import Agent
 
-from .mcp_servers import get_mcp_servers
 from .prompts import load_system_prompt
 from .providers import resolve_model
 
 
-def make_agent(provider: str, model: str) -> Agent:
+def make_agent(provider: str, model: str, toolsets=None) -> Agent:
     """
-    Create a Pydantic AI Agent with both OrionBelt MCP servers as toolsets.
-
-    The Agent must be used within `async with agent.run_mcp_servers():` to
-    start the MCP subprocess connections before calling run_stream().
+    Create a Pydantic AI Agent with the given toolsets (MCP servers).
 
     Args:
         provider: Provider name ("openrouter", "mlx", "ollama", "anthropic", "openai")
         model: Model identifier string
+        toolsets: Pre-connected MCP server instances. If None, creates agent
+                  with no toolsets.
 
     Returns:
-        Configured Pydantic AI Agent with MCP toolsets
-
-    Example:
-        ```python
-        agent = make_agent("openrouter", "anthropic/claude-sonnet-4-5")
-        async with agent.run_mcp_servers() as mcp_ctx:
-            async with agent.run_stream("Show me sales data") as result:
-                async for event in result.stream_events():
-                    ...
-        ```
+        Configured Pydantic AI Agent
     """
     llm_model = resolve_model(provider, model)
 
     return Agent(
         model=llm_model,
-        toolsets=get_mcp_servers(),
+        toolsets=toolsets or [],
         system_prompt=load_system_prompt(),
     )

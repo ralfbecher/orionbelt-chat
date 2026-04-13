@@ -84,15 +84,7 @@ async def on_start():
     init_success = await _init_agent(provider, model)
 
     if init_success:
-        named_servers = get_mcp_servers_named()
-        if named_servers:
-            server_list = "\n".join(f"- `{name}`" for name, _ in named_servers)
-            mcp_info = f"Connected MCP servers:\n{server_list}"
-        else:
-            mcp_info = "No MCP servers configured."
-
-        cl.user_session.set("mcp_info", mcp_info)
-
+        mcp_info = cl.user_session.get("mcp_info", "")
         status_msg = cl.Message(
             content=(
                 f"**OrionBelt Analytics Assistant** ready.\n\n"
@@ -107,31 +99,61 @@ async def on_start():
 
 async def _init_agent(provider: str, model: str) -> bool:
     """
-    Create agent, enter MCP context, store in session.
+    Connect MCP servers individually, create agent with the successful ones.
+
+    Stores ``mcp_info`` in the session describing connectivity status.
 
     Returns:
-        True if initialization succeeded, False otherwise
+        True if agent was created (even with partial MCP connectivity)
     """
-    # Close previous MCP context if it exists
-    prev_ctx = cl.user_session.get("mcp_context")
-    if prev_ctx:
+    # Close previously connected MCP servers
+    for ctx in cl.user_session.get("mcp_contexts") or []:
         try:
-            await prev_ctx.__aexit__(None, None, None)
+            await ctx.__aexit__(None, None, None)
         except Exception:
             pass
 
+    named_servers = get_mcp_servers_named()
+    connected = []
+    connected_names = []
+    failed_names = []
+    active_contexts = []
+
+    # Connect each MCP server individually
+    for name, server in named_servers:
+        try:
+            await server.__aenter__()
+            connected.append(server)
+            connected_names.append(name)
+            active_contexts.append(server)
+            logger.info("MCP server connected: %s", name)
+        except Exception as e:
+            logger.warning("MCP server failed: %s — %s", name, e)
+            failed_names.append((name, e))
+
+    # Build MCP status info
+    parts = []
+    if connected_names:
+        server_list = "\n".join(f"- `{n}`" for n in connected_names)
+        parts.append(f"Connected MCP servers:\n{server_list}")
+    if failed_names:
+        fail_list = "\n".join(f"- `{n}`: {e}" for n, e in failed_names)
+        parts.append(f"Failed to connect:\n{fail_list}")
+    if not named_servers:
+        parts.append("No MCP servers configured.")
+    cl.user_session.set("mcp_info", "\n\n".join(parts))
+
+    # Create agent with whatever servers connected
     try:
-        agent = make_agent(provider, model)
-        mcp_ctx = agent.run_mcp_servers()
-        await mcp_ctx.__aenter__()
+        agent = make_agent(provider, model, toolsets=connected)
         cl.user_session.set("agent", agent)
-        cl.user_session.set("mcp_context", mcp_ctx)
+        cl.user_session.set("mcp_contexts", active_contexts)
         return True
     except Exception as e:
         cl.user_session.set("agent", None)
-        cl.user_session.set("mcp_context", None)
+        cl.user_session.set("mcp_contexts", [])
         await cl.Message(
-            content=f"⚠️ Failed to initialise agent: {e}",
+            content=f"Failed to create agent: {e}",
             author="System",
         ).send()
         return False
@@ -146,10 +168,9 @@ async def on_stop():
 @cl.on_chat_end
 async def on_end():
     """Clean up MCP server subprocesses when session ends."""
-    mcp_ctx = cl.user_session.get("mcp_context")
-    if mcp_ctx:
+    for ctx in cl.user_session.get("mcp_contexts") or []:
         try:
-            await mcp_ctx.__aexit__(None, None, None)
+            await ctx.__aexit__(None, None, None)
         except Exception:
             pass
 
@@ -180,12 +201,14 @@ async def on_settings_update(settings_values: dict):
     init_success = await _init_agent(provider, model)
 
     if init_success:
+        # _init_agent already created/updated the status_msg with MCP info
+        # Just send a confirmation
         await cl.Message(
             content=f"Now using `{model}` via `{provider}`.",
             author="System",
         ).send()
 
-        # Update the header status message
+        # Also update the original header status message if it exists
         status_msg = cl.user_session.get("status_msg")
         mcp_info = cl.user_session.get("mcp_info", "")
         if status_msg:
@@ -224,7 +247,7 @@ async def on_message(message: cl.Message):
 
     chart_elements: list[cl.Text] = []
     response_msg = cl.Message(content="")
-    active_step: cl.Step | None = None
+    tool_steps: dict[str, cl.Step] = {}  # tool_call_id → Step
     result_messages = None
 
     logger.info(
@@ -287,39 +310,43 @@ async def on_message(message: cl.Message):
                             if isinstance(event, FunctionToolCallEvent):
                                 tool_name = event.part.tool_name
                                 tool_args = event.part.args
+                                call_id = event.part.tool_call_id
                                 if isinstance(tool_args, str):
                                     try:
                                         tool_args = json.loads(tool_args)
                                     except (json.JSONDecodeError, TypeError):
                                         pass
 
-                                logger.info("Tool call: %s(%s)", tool_name, tool_args)
+                                logger.info("Tool call [%s]: %s(%s)", call_id, tool_name, tool_args)
 
-                                active_step = cl.Step(name=tool_name, type="tool")
-                                active_step.input = (
+                                step = cl.Step(name=tool_name, type="tool")
+                                step.input = (
                                     json.dumps(tool_args, indent=2) if isinstance(tool_args, dict) else str(tool_args)
                                 )
-                                await active_step.send()
+                                await step.send()
+                                tool_steps[call_id] = step
 
                             elif isinstance(event, FunctionToolResultEvent):
                                 result_content = str(event.result.content)
+                                call_id = event.result.tool_call_id
                                 logger.info(
-                                    "Tool result (%d chars): %s → %s",
+                                    "Tool result [%s] (%d chars): %s → %s",
+                                    call_id,
                                     len(result_content),
                                     event.result.tool_name,
                                     result_content[:200],
                                 )
 
-                                if active_step:
+                                step = tool_steps.pop(call_id, None)
+                                if step:
                                     if len(result_content) > STEP_OUTPUT_LIMIT:
-                                        active_step.output = (
+                                        step.output = (
                                             result_content[:STEP_OUTPUT_LIMIT]
                                             + f"\n\n… (truncated — {len(result_content):,} chars total)"
                                         )
                                     else:
-                                        active_step.output = result_content
-                                    await active_step.update()
-                                    active_step = None
+                                        step.output = result_content
+                                    await step.update()
                     logger.info("Tool calls complete.")
 
             # Capture full message history while the run context is still open

@@ -131,50 +131,70 @@
 
 // Arrow Up in empty input → recall last user message
 (function arrowUpRecall() {
-  var lastUserMessage = "";
+  var messageHistory = [];
+  var historyIndex = -1;
 
-  // Capture each user message when sent
-  new MutationObserver(function () {
-    // User messages have data-message-author="user" or similar markers
-    var userMsgs = document.querySelectorAll('[class*="userMessage"], [data-message-author="user"]');
-    if (userMsgs.length === 0) {
-      // Fallback: grab the last message that appears on the right side
-      var allMsgs = document.querySelectorAll(".markdown-body, [class*=\"message\"]");
-      // Not reliable enough alone, so also track via keydown
-    }
-    if (userMsgs.length > 0) {
-      var last = userMsgs[userMsgs.length - 1];
-      var text = (last.textContent || "").trim();
-      if (text) lastUserMessage = text;
-    }
-  }).observe(document.body, { childList: true, subtree: true });
-
-  // Also capture via form submission / Enter key
+  // Capture user message right before Enter submits (keydown fires before React)
   document.addEventListener("keydown", function (e) {
     if (e.key === "Enter" && !e.shiftKey) {
       var textarea = document.querySelector("textarea");
       if (textarea && textarea.value.trim()) {
-        lastUserMessage = textarea.value.trim();
+        messageHistory.push(textarea.value.trim());
+        historyIndex = -1;
       }
     }
   }, true);
 
-  // Arrow Up when input is empty → fill with last message
-  document.addEventListener("keydown", function (e) {
-    if (e.key !== "ArrowUp") return;
-    var textarea = document.querySelector("textarea");
-    if (!textarea || document.activeElement !== textarea) return;
-    // Only recall when the input is empty
-    if (textarea.value.trim() !== "") return;
-    if (!lastUserMessage) return;
-    e.preventDefault();
-    // Set value via native input setter to trigger React state update
+  // Also capture when the send button is clicked
+  document.addEventListener("click", function (e) {
+    var btn = e.target.closest("button");
+    if (!btn) return;
+    var label = (btn.getAttribute("aria-label") || btn.id || "").toLowerCase();
+    if (label.includes("send") || btn.id === "send-button") {
+      var textarea = document.querySelector("textarea");
+      if (textarea && textarea.value.trim()) {
+        messageHistory.push(textarea.value.trim());
+        historyIndex = -1;
+      }
+    }
+  }, true);
+
+  function setTextareaValue(textarea, text) {
     var nativeSetter = Object.getOwnPropertyDescriptor(
       window.HTMLTextAreaElement.prototype, "value"
     ).set;
-    nativeSetter.call(textarea, lastUserMessage);
+    nativeSetter.call(textarea, text);
     textarea.dispatchEvent(new Event("input", { bubbles: true }));
-    // Move cursor to end
-    textarea.selectionStart = textarea.selectionEnd = lastUserMessage.length;
+    textarea.selectionStart = textarea.selectionEnd = text.length;
+    textarea.focus();
+  }
+
+  // Arrow Up / Arrow Down to navigate message history
+  document.addEventListener("keydown", function (e) {
+    if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+    var textarea = document.querySelector("textarea");
+    if (!textarea || document.activeElement !== textarea) return;
+    if (messageHistory.length === 0) return;
+
+    if (e.key === "ArrowUp") {
+      // Only start recall when the input is empty or already in recall mode
+      if (textarea.value.trim() !== "" && historyIndex === -1) return;
+      e.preventDefault();
+      if (historyIndex === -1) {
+        historyIndex = messageHistory.length - 1;
+      } else if (historyIndex > 0) {
+        historyIndex--;
+      }
+      setTextareaValue(textarea, messageHistory[historyIndex]);
+    } else if (e.key === "ArrowDown" && historyIndex !== -1) {
+      e.preventDefault();
+      if (historyIndex < messageHistory.length - 1) {
+        historyIndex++;
+        setTextareaValue(textarea, messageHistory[historyIndex]);
+      } else {
+        historyIndex = -1;
+        setTextareaValue(textarea, "");
+      }
+    }
   });
 })();
