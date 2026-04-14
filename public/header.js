@@ -143,21 +143,36 @@
     }).observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
 
     function renderMermaidBlocks() {
-      // Chainlit renders fenced code blocks as <code class="language-mermaid">
-      var blocks = document.querySelectorAll("code.language-mermaid");
+      // Chainlit renders fenced code blocks as:
+      //   <div>           ← wrapper with language label + copy button
+      //     <pre>
+      //       <code class="hljs language-mermaid">…</code>
+      //     </pre>
+      //   </div>
+      // We find the <code>, extract the text, and replace the entire
+      // wrapper (or <pre> fallback) with a Mermaid render container.
+      var blocks = document.querySelectorAll('code[class*="language-mermaid"]');
       blocks.forEach(function (codeEl) {
         if (codeEl.dataset.mermaidRendered) return;
         codeEl.dataset.mermaidRendered = "true";
 
-        var pre = codeEl.parentElement;
-        if (!pre || pre.tagName !== "PRE") return;
-
         var source = codeEl.textContent;
+        if (!source || !source.trim()) return;
+
+        // Walk up: code → pre → wrapper div (Chainlit code block container)
+        var pre = codeEl.closest("pre");
+        if (!pre) return;
+        var wrapper = pre.parentElement;
+
         var container = document.createElement("div");
         container.className = "mermaid orionbelt-mermaid-rendered";
         container.dataset.mermaidSource = source;
         container.textContent = source;
-        pre.parentElement.replaceChild(container, pre);
+
+        // Replace the entire code block wrapper if it looks like one
+        // (contains the pre and possibly the language label / copy button)
+        var target = wrapper && wrapper.querySelector("pre") === pre ? wrapper : pre;
+        target.parentElement.replaceChild(container, target);
       });
       // Let Mermaid process all unprocessed .mermaid elements
       try {
