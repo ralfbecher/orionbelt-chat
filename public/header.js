@@ -143,16 +143,44 @@
     }).observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
 
     function renderMermaidBlocks() {
-      // Chainlit renders fenced code blocks as:
-      //   <div>           ← wrapper with language label + copy button
-      //     <pre>
-      //       <code class="hljs language-mermaid">…</code>
-      //     </pre>
-      //   </div>
-      // We find the <code>, extract the text, and replace the entire
-      // wrapper (or <pre> fallback) with a Mermaid render container.
-      var blocks = document.querySelectorAll('code[class*="language-mermaid"]');
-      blocks.forEach(function (codeEl) {
+      // Chainlit renders fenced code blocks inside a wrapper that shows
+      // the language label (e.g. "mermaid") as text.  highlight.js may
+      // overwrite the language-* class, so we cannot rely on CSS classes.
+      // Instead, scan all <pre> ancestors for a sibling/child that shows
+      // "mermaid" as the language label text, or fall back to matching
+      // the code class directly.
+
+      // Strategy 1: find <code> with language-mermaid class (standard path)
+      var found = document.querySelectorAll('code[class*="language-mermaid"]');
+
+      // Strategy 2: find code blocks where the wrapper has a "mermaid" label
+      if (!found.length) {
+        // Chainlit wraps code blocks in a container whose first child/span
+        // holds the language name as text.  Look for any element whose
+        // textContent is exactly "mermaid" and has a <pre> sibling.
+        document.querySelectorAll("pre").forEach(function (pre) {
+          if (pre.dataset.mermaidChecked) return;
+          pre.dataset.mermaidChecked = "true";
+          var wrapper = pre.parentElement;
+          if (!wrapper) return;
+          // Look at wrapper's children for the language label
+          var children = wrapper.children;
+          for (var i = 0; i < children.length; i++) {
+            if (children[i].tagName === "PRE") continue;
+            if (children[i].textContent.trim().toLowerCase() === "mermaid") {
+              // Found a mermaid label — mark the code element inside
+              var code = pre.querySelector("code");
+              if (code && !code.dataset.mermaidRendered) {
+                code.classList.add("language-mermaid");
+              }
+              break;
+            }
+          }
+        });
+        found = document.querySelectorAll('code[class*="language-mermaid"]');
+      }
+
+      found.forEach(function (codeEl) {
         if (codeEl.dataset.mermaidRendered) return;
         codeEl.dataset.mermaidRendered = "true";
 
