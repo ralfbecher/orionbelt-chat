@@ -25,5 +25,4 @@ def make_agent(provider: str, model: str, toolsets=None) -> Agent:
         model=llm_model,
         toolsets=toolsets or [],
         system_prompt=load_system_prompt(),
-        retries=3,
     )
