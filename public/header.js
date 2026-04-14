@@ -144,42 +144,43 @@
     }).observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
 
     function findMermaidCodeBlocks() {
-      // Chainlit wraps code blocks in a container with a language label
-      // and a copy button.  The <code> class may or may not contain
-      // "language-mermaid" (highlight.js can overwrite it).  We detect
-      // mermaid blocks by scanning every <pre> for a sibling element
-      // whose visible text reads "mermaid" (the language label Chainlit
-      // renders above the code area).
       var results = [];
       document.querySelectorAll("pre").forEach(function (pre) {
         if (pre.dataset.mermaidProcessed) return;
-        var wrapper = pre.parentElement;
-        if (!wrapper) return;
+        var code = pre.querySelector("code");
+        if (!code) return;
 
         var isMermaid = false;
 
         // Check 1: code element has language-mermaid class
-        var code = pre.querySelector("code");
-        if (code && /language-mermaid/i.test(code.className)) {
+        if (/language-mermaid/i.test(code.className)) {
           isMermaid = true;
         }
 
-        // Check 2: wrapper or siblings contain a "mermaid" text label
+        // Check 2: walk up from <pre> and look for "mermaid" label text
+        // anywhere in the ancestor tree (up to 5 levels)
         if (!isMermaid) {
-          for (var i = 0; i < wrapper.childNodes.length; i++) {
-            var child = wrapper.childNodes[i];
-            if (child === pre) continue;
-            var txt = (child.textContent || "").trim().toLowerCase();
-            if (txt === "mermaid") {
-              isMermaid = true;
-              break;
+          var el = pre.parentElement;
+          for (var depth = 0; depth < 5 && el; depth++) {
+            // Search all descendant text nodes of this ancestor
+            var walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+            var textNode;
+            while ((textNode = walker.nextNode())) {
+              // Skip text inside the <pre> itself
+              if (pre.contains(textNode)) continue;
+              if (textNode.textContent.trim().toLowerCase() === "mermaid") {
+                isMermaid = true;
+                break;
+              }
             }
+            if (isMermaid) break;
+            el = el.parentElement;
           }
         }
 
-        if (isMermaid && code) {
+        if (isMermaid) {
           pre.dataset.mermaidProcessed = "true";
-          results.push({ code: code, pre: pre, wrapper: wrapper });
+          results.push({ code: code, pre: pre });
         }
       });
       return results;
@@ -202,9 +203,23 @@
         container.dataset.mermaidSource = source;
         container.textContent = source;
 
-        // Replace the entire Chainlit code block wrapper
-        var target = block.wrapper.querySelector("pre") === block.pre
-          ? block.wrapper : block.pre;
+        // Walk up from <pre> to find the outermost code block container.
+        // Stop when the parent has other message content (multiple children
+        // that aren't part of the code block chrome).
+        var target = block.pre;
+        var el = block.pre.parentElement;
+        for (var i = 0; i < 4 && el; i++) {
+          // If this ancestor ONLY contains code-block-related stuff
+          // (the pre, labels, buttons) it's part of the wrapper
+          var hasPre = el.querySelector("pre") === block.pre;
+          var childCount = el.children.length;
+          if (hasPre && childCount <= 4) {
+            target = el;
+          } else {
+            break;
+          }
+          el = el.parentElement;
+        }
         target.parentElement.replaceChild(container, target);
       });
 
