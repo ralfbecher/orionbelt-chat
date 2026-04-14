@@ -227,6 +227,57 @@ async def on_settings_update(settings_values: dict):
 # ── Message handler ────────────────────────────────────────────────────────
 
 
+# ── MCP reconnection helpers ──────────────────────────────────────────────
+
+_MCP_ERROR_PHRASES = (
+    "Session terminated",
+    "session expired",
+    "McpError",
+    "Connection refused",
+    "Connection reset",
+    "Server disconnected",
+    "EOF",
+    "Broken pipe",
+    "stream has been closed",
+)
+
+
+def _is_mcp_session_error(exc: BaseException) -> bool:
+    """Walk the exception chain looking for MCP / connection-loss signals."""
+    cur: BaseException | None = exc
+    while cur is not None:
+        text = str(cur)
+        if any(phrase in text for phrase in _MCP_ERROR_PHRASES):
+            return True
+        cur = cur.__cause__ if cur.__cause__ is not cur else None
+    return False
+
+
+async def _reconnect_mcp() -> None:
+    """Attempt MCP reconnection and inform the user."""
+    logger.warning("MCP session lost — attempting reconnection …")
+    await cl.Message(
+        content="MCP server connection lost. Reconnecting …",
+        author="System",
+    ).send()
+    provider = cl.user_session.get("provider")
+    model = cl.user_session.get("model")
+    if await _init_agent(provider, model):
+        mcp_info = cl.user_session.get("mcp_info", "")
+        await cl.Message(
+            content=f"Reconnected. {mcp_info}\n\nPlease resend your message.",
+            author="System",
+        ).send()
+    else:
+        await cl.Message(
+            content="Reconnection failed. Check that MCP servers are running.",
+            author="System",
+        ).send()
+
+
+# ── Message handler ────────────────────────────────────────────────────────
+
+
 @cl.on_message
 async def on_message(message: cl.Message):
     """
@@ -367,7 +418,12 @@ async def on_message(message: cl.Message):
                             step.output = f"Error: {tool_err}"
                             await step.update()
                         tool_steps.clear()
-                        text_parts.append(f"\n\nTool error: {tool_err}")
+
+                        # Check the full exception chain for MCP session errors
+                        if _is_mcp_session_error(tool_err):
+                            await _reconnect_mcp()
+                        else:
+                            text_parts.append(f"\n\nTool error: {tool_err}")
                         break
                     logger.info("Tool calls complete.")
 
@@ -454,33 +510,9 @@ async def on_message(message: cl.Message):
         if isinstance(e, KeyboardInterrupt | SystemExit):
             raise
 
-        # Detect MCP session termination and attempt automatic reconnection
-        err_chain = str(e) + " " + str(getattr(e, "__cause__", ""))
-        is_mcp_session_error = any(
-            phrase in err_chain
-            for phrase in ("Session terminated", "session expired", "McpError")
-        )
-
         try:
-            if is_mcp_session_error:
-                logger.warning("MCP session lost — attempting reconnection …")
-                await cl.Message(
-                    content="MCP server connection lost. Reconnecting …",
-                    author="System",
-                ).send()
-                provider = cl.user_session.get("provider")
-                model = cl.user_session.get("model")
-                if await _init_agent(provider, model):
-                    mcp_info = cl.user_session.get("mcp_info", "")
-                    await cl.Message(
-                        content=f"Reconnected. {mcp_info}\n\nPlease resend your message.",
-                        author="System",
-                    ).send()
-                else:
-                    await cl.Message(
-                        content="Reconnection failed. Check that MCP servers are running.",
-                        author="System",
-                    ).send()
+            if _is_mcp_session_error(e):
+                await _reconnect_mcp()
             else:
                 await cl.Message(
                     content=f"Error: {e}",
