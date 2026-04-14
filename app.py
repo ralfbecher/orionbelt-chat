@@ -357,16 +357,18 @@ async def on_message(message: cl.Message):
                                             step.output = result_content
                                         await step.update()
                     except Exception as tool_err:
-                        # pydantic-ai's ModelRetry (MCP tool validation errors)
-                        # can leak through node.stream() instead of being retried
-                        # internally.  Log the error, close any open UI steps, and
-                        # let the agent loop continue — the model will see the
-                        # error in its history and can adjust.
+                        # pydantic-ai's ModelRetry / max-retries-exceeded can
+                        # leak through node.stream() instead of being handled
+                        # internally.  The graph never sets _next_node, so
+                        # continuing the loop would raise a second error.
+                        # Close any open UI steps and break out of the loop.
                         logger.warning("Tool execution error: %s", tool_err)
                         for call_id, step in list(tool_steps.items()):
                             step.output = f"Error: {tool_err}"
                             await step.update()
                         tool_steps.clear()
+                        text_parts.append(f"\n\nTool error: {tool_err}")
+                        break
                     logger.info("Tool calls complete.")
 
             # Capture full message history while the run context is still open
