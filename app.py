@@ -26,6 +26,7 @@ STEP_OUTPUT_LIMIT = 10_000
 
 from src.agent import make_agent
 from src.chart_renderer import render_chart_if_present
+from src.file_downloads import extract_downloads_from_response, extract_downloads_from_tool_results
 from src.mcp_servers import get_mcp_servers_named
 from src.providers import PROVIDER_LABELS, PROVIDER_MODELS, default_model_for
 from src.settings import settings
@@ -366,6 +367,22 @@ async def on_message(message: cl.Message):
 
         # Send the response message AFTER all steps so it appears below them
         response_msg.content = "".join(text_parts)
+
+        # Attach downloadable files from code blocks in the response
+        download_elements = extract_downloads_from_response(response_msg.content)
+        if result_messages:
+            download_elements.extend(extract_downloads_from_tool_results(result_messages))
+        if download_elements:
+            # Deduplicate by content (code block and tool result may overlap)
+            seen_content: set[bytes] = set()
+            unique = []
+            for el in download_elements:
+                key = el.content if isinstance(el.content, bytes) else (el.content or "").encode()
+                if key not in seen_content:
+                    seen_content.add(key)
+                    unique.append(el)
+            response_msg.elements = unique
+
         await response_msg.send()
         response_sent = True
         logger.debug("Response message sent.")
