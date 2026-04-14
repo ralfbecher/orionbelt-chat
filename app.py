@@ -313,48 +313,60 @@ async def on_message(message: cl.Message):
                 # ── Tool calls: show as Chainlit steps ──────────────
                 elif Agent.is_call_tools_node(node):
                     logger.info("Processing tool calls …")
-                    async with node.stream(agent_run.ctx) as stream:
-                        async for event in stream:
-                            if isinstance(event, FunctionToolCallEvent):
-                                tool_name = event.part.tool_name
-                                tool_args = event.part.args
-                                call_id = event.part.tool_call_id
-                                if isinstance(tool_args, str):
-                                    try:
-                                        tool_args = json.loads(tool_args)
-                                    except (json.JSONDecodeError, TypeError):
-                                        pass
+                    try:
+                        async with node.stream(agent_run.ctx) as stream:
+                            async for event in stream:
+                                if isinstance(event, FunctionToolCallEvent):
+                                    tool_name = event.part.tool_name
+                                    tool_args = event.part.args
+                                    call_id = event.part.tool_call_id
+                                    if isinstance(tool_args, str):
+                                        try:
+                                            tool_args = json.loads(tool_args)
+                                        except (json.JSONDecodeError, TypeError):
+                                            pass
 
-                                logger.info("Tool call [%s]: %s(%s)", call_id, tool_name, tool_args)
+                                    logger.info("Tool call [%s]: %s(%s)", call_id, tool_name, tool_args)
 
-                                step = cl.Step(name=tool_name, type="tool", parent_id=_run_step_id)
-                                step.input = (
-                                    json.dumps(tool_args, indent=2) if isinstance(tool_args, dict) else str(tool_args)
-                                )
-                                await step.send()
-                                tool_steps[call_id] = step
+                                    step = cl.Step(name=tool_name, type="tool", parent_id=_run_step_id)
+                                    step.input = (
+                                        json.dumps(tool_args, indent=2) if isinstance(tool_args, dict) else str(tool_args)
+                                    )
+                                    await step.send()
+                                    tool_steps[call_id] = step
 
-                            elif isinstance(event, FunctionToolResultEvent):
-                                result_content = str(event.result.content)
-                                call_id = event.result.tool_call_id
-                                logger.info(
-                                    "Tool result [%s] (%d chars): %s → %s",
-                                    call_id,
-                                    len(result_content),
-                                    event.result.tool_name,
-                                    result_content[:200],
-                                )
+                                elif isinstance(event, FunctionToolResultEvent):
+                                    result_content = str(event.result.content)
+                                    call_id = event.result.tool_call_id
+                                    logger.info(
+                                        "Tool result [%s] (%d chars): %s → %s",
+                                        call_id,
+                                        len(result_content),
+                                        event.result.tool_name,
+                                        result_content[:200],
+                                    )
 
-                                step = tool_steps.pop(call_id, None)
-                                if step:
-                                    if len(result_content) > STEP_OUTPUT_LIMIT:
-                                        step.output = (
-                                            result_content[:STEP_OUTPUT_LIMIT]
-                                            + f"\n\n… (truncated — {len(result_content):,} chars total)"
-                                        )
-                                    else:
-                                        step.output = result_content
-                                    await step.update()
+                                    step = tool_steps.pop(call_id, None)
+                                    if step:
+                                        if len(result_content) > STEP_OUTPUT_LIMIT:
+                                            step.output = (
+                                                result_content[:STEP_OUTPUT_LIMIT]
+                                                + f"\n\n… (truncated — {len(result_content):,} chars total)"
+                                            )
+                                        else:
+                                            step.output = result_content
+                                        await step.update()
+                    except Exception as tool_err:
+                        # pydantic-ai's ModelRetry (MCP tool validation errors)
+                        # can leak through node.stream() instead of being retried
+                        # internally.  Log the error, close any open UI steps, and
+                        # let the agent loop continue — the model will see the
+                        # error in its history and can adjust.
+                        logger.warning("Tool execution error: %s", tool_err)
+                        for call_id, step in list(tool_steps.items()):
+                            step.output = f"Error: {tool_err}"
+                            await step.update()
+                        tool_steps.clear()
                     logger.info("Tool calls complete.")
 
             # Capture full message history while the run context is still open
