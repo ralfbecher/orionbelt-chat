@@ -7,7 +7,7 @@
 
 <p align="center"><strong>AI-powered chat interface for OrionBelt Analytics & Semantic Layer</strong></p>
 
-[![Version](https://img.shields.io/badge/version-1.0.0-brightgreen.svg)](https://github.com/ralfbecher/orionbelt-chat)
+[![Version](https://img.shields.io/badge/version-1.0.1-brightgreen.svg)](https://github.com/ralfbecher/orionbelt-chat)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![License: BSL 1.1](https://img.shields.io/badge/License-BSL_1.1-orange.svg)](https://github.com/ralfbecher/orionbelt-chat/blob/main/LICENSE)
 [![Chainlit](https://img.shields.io/badge/Chainlit-2.10+-blue)](https://chainlit.io)
@@ -51,6 +51,7 @@ A production-ready chat application that connects to OrionBelt Analytics and Ori
 - **Dual MCP server support** - Connect to Analytics and Semantic Layer simultaneously
 - **Graceful degradation** - One unreachable server won't block the app; agent starts with available servers
 - **Auto-reconnection** - Detects MCP session loss and reconnects automatically
+- **Tool call resilience** - Retries failed tool calls up to 3 times; preserves conversation context on errors
 - **Flexible transport** - Stdio (local subprocess) or Streamable HTTP (remote) per server
 - **Tool visibility** - Collapsible steps show tool calls with arguments and results
 - **Multi-turn context** - Full conversation history management with Pydantic AI
@@ -61,6 +62,12 @@ A production-ready chat application that connects to OrionBelt Analytics and Ori
 - **FastMCP Apps integration** - Fetches chart data from `ui://` resource URIs returned by MCP tools
 - **Multiple chart types** - Bar, line, scatter, heatmap with auto-detection
 - **Multiple extraction strategies** - Handles Plotly figure dicts, `Plotly.newPlot()` in HTML, and bare trace arrays
+
+### Mermaid Diagrams
+
+- **Client-side rendering** - Mermaid.js loaded from CDN renders `erDiagram`, `flowchart`, `sequenceDiagram`, and other diagram types inline
+- **Auto-detection** - Mermaid syntax in MCP tool results is automatically surfaced as a rendered diagram
+- **Theme-aware** - Diagrams re-render when switching between light and dark mode
 
 ### File Downloads
 
@@ -258,6 +265,7 @@ Create an OBML model for customer analytics with metrics for revenue, order coun
 - **Pydantic AI 1.77+** - Agent framework with node-by-node iteration (`agent.iter()`)
 - **MCP Transport** - Stdio (local subprocess) or Streamable HTTP (remote) per server
 - **Chart Renderer** - Native Plotly rendering from FastMCP Apps `ui://` resources
+- **Mermaid Renderer** - Client-side diagram rendering via Mermaid.js CDN
 - **File Downloads** - Auto-detect downloadable content (TTL, JSON, CSV, SQL) in tool results
 
 ## Development

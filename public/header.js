@@ -1,6 +1,6 @@
 // Inject OrionBelt logo, app name, and version badge into the Chainlit header
 (function injectHeader() {
-  var VERSION = "v1.0.0";
+  var VERSION = "v1.0.1";
   var LOGO_DARK = "/public/logo_w.png";
   var LOGO_LIGHT = "/public/logo.png";
   var APP_NAME = "Chat";
@@ -133,7 +133,6 @@
     new MutationObserver(function () {
       var dark = document.documentElement.classList.contains("dark");
       mermaid.initialize({ startOnLoad: false, theme: dark ? "dark" : "default" });
-      // Re-render existing diagrams with new theme
       document.querySelectorAll(".orionbelt-mermaid-rendered").forEach(function (el) {
         delete el.dataset.mermaidRendered;
         el.removeAttribute("data-processed");
@@ -142,24 +141,85 @@
       renderMermaidBlocks();
     }).observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
 
+    function findMermaidCodeBlocks() {
+      var results = [];
+      document.querySelectorAll("pre").forEach(function (pre) {
+        if (pre.dataset.mermaidProcessed) return;
+        var code = pre.querySelector("code");
+        if (!code) return;
+
+        var isMermaid = false;
+
+        // Check 1: code element has language-mermaid class
+        if (/language-mermaid/i.test(code.className)) {
+          isMermaid = true;
+        }
+
+        // Check 2: walk up from <pre> and look for "mermaid" label text
+        // anywhere in the ancestor tree (up to 5 levels)
+        if (!isMermaid) {
+          var el = pre.parentElement;
+          for (var depth = 0; depth < 5 && el; depth++) {
+            // Search all descendant text nodes of this ancestor
+            var walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+            var textNode;
+            while ((textNode = walker.nextNode())) {
+              // Skip text inside the <pre> itself
+              if (pre.contains(textNode)) continue;
+              if (textNode.textContent.trim().toLowerCase() === "mermaid") {
+                isMermaid = true;
+                break;
+              }
+            }
+            if (isMermaid) break;
+            el = el.parentElement;
+          }
+        }
+
+        if (isMermaid) {
+          pre.dataset.mermaidProcessed = "true";
+          results.push({ code: code, pre: pre });
+        }
+      });
+      return results;
+    }
+
     function renderMermaidBlocks() {
-      // Chainlit renders fenced code blocks as <code class="language-mermaid">
-      var blocks = document.querySelectorAll("code.language-mermaid");
-      blocks.forEach(function (codeEl) {
-        if (codeEl.dataset.mermaidRendered) return;
-        codeEl.dataset.mermaidRendered = "true";
+      var blocks = findMermaidCodeBlocks();
+      if (!blocks.length) return;
 
-        var pre = codeEl.parentElement;
-        if (!pre || pre.tagName !== "PRE") return;
+      blocks.forEach(function (block) {
+        if (block.code.dataset.mermaidRendered) return;
+        block.code.dataset.mermaidRendered = "true";
 
-        var source = codeEl.textContent;
+        var source = block.code.textContent;
+        if (!source || !source.trim()) return;
+
         var container = document.createElement("div");
         container.className = "mermaid orionbelt-mermaid-rendered";
         container.dataset.mermaidSource = source;
         container.textContent = source;
-        pre.parentElement.replaceChild(container, pre);
+
+        // Walk up from <pre> to find the outermost code block container.
+        // Stop when the parent has other message content (multiple children
+        // that aren't part of the code block chrome).
+        var target = block.pre;
+        var el = block.pre.parentElement;
+        for (var i = 0; i < 4 && el; i++) {
+          // If this ancestor ONLY contains code-block-related stuff
+          // (the pre, labels, buttons) it's part of the wrapper
+          var hasPre = el.querySelector("pre") === block.pre;
+          var childCount = el.children.length;
+          if (hasPre && childCount <= 4) {
+            target = el;
+          } else {
+            break;
+          }
+          el = el.parentElement;
+        }
+        target.parentElement.replaceChild(container, target);
       });
-      // Let Mermaid process all unprocessed .mermaid elements
+
       try {
         mermaid.run({ querySelector: ".mermaid:not([data-processed])" });
       } catch (_) { /* ignore if no elements */ }

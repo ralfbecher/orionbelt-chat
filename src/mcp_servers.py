@@ -11,11 +11,12 @@ def _is_url(value: str) -> bool:
 
 def _make_server(endpoint: str, module: str) -> MCPServerStreamableHTTP | MCPServerStdio:
     if _is_url(endpoint):
-        return MCPServerStreamableHTTP(url=endpoint, timeout=60)
+        return MCPServerStreamableHTTP(url=endpoint, timeout=60, max_retries=3)
     return MCPServerStdio(
         "uv",
         args=["run", "--directory", endpoint, "python", "-m", module],
         timeout=60,
+        max_retries=3,
     )
 
 
