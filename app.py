@@ -427,12 +427,17 @@ async def on_message(message: cl.Message):
                         break
                     logger.info("Tool calls complete.")
 
-            # Capture full message history while the run context is still open
-            if agent_run.result is not None:
+            # Capture full message history while the run context is still open.
+            # Even when the run didn't complete (tool error → break), preserve
+            # the partial history so the model retains context on the next turn.
+            try:
                 result_messages = agent_run.all_messages()
-                logger.info("Agent run finished — %d messages in history.", len(result_messages))
-            else:
-                logger.warning("Agent run ended without a result.")
+                if agent_run.result is not None:
+                    logger.info("Agent run finished — %d messages in history.", len(result_messages))
+                else:
+                    logger.info("Agent run incomplete — preserving %d messages in history.", len(result_messages))
+            except Exception:
+                logger.warning("Agent run ended without recoverable history.")
 
         logger.debug("Agent context closed.")
 
