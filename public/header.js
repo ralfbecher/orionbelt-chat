@@ -125,9 +125,7 @@
 (function mermaidRenderer() {
   var script = document.createElement("script");
   script.src = "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js";
-  script.onerror = function () { console.error("[OrionBelt] Failed to load Mermaid.js CDN"); };
   script.onload = function () {
-    console.log("[OrionBelt] Mermaid.js loaded:", typeof mermaid);
     var isDark = document.documentElement.classList.contains("dark");
     mermaid.initialize({ startOnLoad: false, theme: isDark ? "dark" : "default" });
 
@@ -189,7 +187,6 @@
     function renderMermaidBlocks() {
       var blocks = findMermaidCodeBlocks();
       if (!blocks.length) return;
-      console.log("[OrionBelt] Found", blocks.length, "mermaid block(s)");
 
       blocks.forEach(function (block) {
         if (block.code.dataset.mermaidRendered) return;
@@ -225,7 +222,7 @@
 
       try {
         mermaid.run({ querySelector: ".mermaid:not([data-processed])" });
-      } catch (err) { console.error("[OrionBelt] Mermaid render error:", err); }
+      } catch (_) { /* ignore if no elements */ }
     }
 
     // Watch for new code blocks as messages stream in
