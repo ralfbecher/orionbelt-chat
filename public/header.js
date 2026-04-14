@@ -125,7 +125,9 @@
 (function mermaidRenderer() {
   var script = document.createElement("script");
   script.src = "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js";
+  script.onerror = function () { console.error("[OrionBelt] Failed to load Mermaid.js CDN"); };
   script.onload = function () {
+    console.log("[OrionBelt] Mermaid.js loaded:", typeof mermaid);
     var isDark = document.documentElement.classList.contains("dark");
     mermaid.initialize({ startOnLoad: false, theme: isDark ? "dark" : "default" });
 
@@ -133,7 +135,6 @@
     new MutationObserver(function () {
       var dark = document.documentElement.classList.contains("dark");
       mermaid.initialize({ startOnLoad: false, theme: dark ? "dark" : "default" });
-      // Re-render existing diagrams with new theme
       document.querySelectorAll(".orionbelt-mermaid-rendered").forEach(function (el) {
         delete el.dataset.mermaidRendered;
         el.removeAttribute("data-processed");
@@ -142,70 +143,74 @@
       renderMermaidBlocks();
     }).observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
 
-    function renderMermaidBlocks() {
-      // Chainlit renders fenced code blocks inside a wrapper that shows
-      // the language label (e.g. "mermaid") as text.  highlight.js may
-      // overwrite the language-* class, so we cannot rely on CSS classes.
-      // Instead, scan all <pre> ancestors for a sibling/child that shows
-      // "mermaid" as the language label text, or fall back to matching
-      // the code class directly.
+    function findMermaidCodeBlocks() {
+      // Chainlit wraps code blocks in a container with a language label
+      // and a copy button.  The <code> class may or may not contain
+      // "language-mermaid" (highlight.js can overwrite it).  We detect
+      // mermaid blocks by scanning every <pre> for a sibling element
+      // whose visible text reads "mermaid" (the language label Chainlit
+      // renders above the code area).
+      var results = [];
+      document.querySelectorAll("pre").forEach(function (pre) {
+        if (pre.dataset.mermaidProcessed) return;
+        var wrapper = pre.parentElement;
+        if (!wrapper) return;
 
-      // Strategy 1: find <code> with language-mermaid class (standard path)
-      var found = document.querySelectorAll('code[class*="language-mermaid"]');
+        var isMermaid = false;
 
-      // Strategy 2: find code blocks where the wrapper has a "mermaid" label
-      if (!found.length) {
-        // Chainlit wraps code blocks in a container whose first child/span
-        // holds the language name as text.  Look for any element whose
-        // textContent is exactly "mermaid" and has a <pre> sibling.
-        document.querySelectorAll("pre").forEach(function (pre) {
-          if (pre.dataset.mermaidChecked) return;
-          pre.dataset.mermaidChecked = "true";
-          var wrapper = pre.parentElement;
-          if (!wrapper) return;
-          // Look at wrapper's children for the language label
-          var children = wrapper.children;
-          for (var i = 0; i < children.length; i++) {
-            if (children[i].tagName === "PRE") continue;
-            if (children[i].textContent.trim().toLowerCase() === "mermaid") {
-              // Found a mermaid label — mark the code element inside
-              var code = pre.querySelector("code");
-              if (code && !code.dataset.mermaidRendered) {
-                code.classList.add("language-mermaid");
-              }
+        // Check 1: code element has language-mermaid class
+        var code = pre.querySelector("code");
+        if (code && /language-mermaid/i.test(code.className)) {
+          isMermaid = true;
+        }
+
+        // Check 2: wrapper or siblings contain a "mermaid" text label
+        if (!isMermaid) {
+          for (var i = 0; i < wrapper.childNodes.length; i++) {
+            var child = wrapper.childNodes[i];
+            if (child === pre) continue;
+            var txt = (child.textContent || "").trim().toLowerCase();
+            if (txt === "mermaid") {
+              isMermaid = true;
               break;
             }
           }
-        });
-        found = document.querySelectorAll('code[class*="language-mermaid"]');
-      }
+        }
 
-      found.forEach(function (codeEl) {
-        if (codeEl.dataset.mermaidRendered) return;
-        codeEl.dataset.mermaidRendered = "true";
+        if (isMermaid && code) {
+          pre.dataset.mermaidProcessed = "true";
+          results.push({ code: code, pre: pre, wrapper: wrapper });
+        }
+      });
+      return results;
+    }
 
-        var source = codeEl.textContent;
+    function renderMermaidBlocks() {
+      var blocks = findMermaidCodeBlocks();
+      if (!blocks.length) return;
+      console.log("[OrionBelt] Found", blocks.length, "mermaid block(s)");
+
+      blocks.forEach(function (block) {
+        if (block.code.dataset.mermaidRendered) return;
+        block.code.dataset.mermaidRendered = "true";
+
+        var source = block.code.textContent;
         if (!source || !source.trim()) return;
-
-        // Walk up: code → pre → wrapper div (Chainlit code block container)
-        var pre = codeEl.closest("pre");
-        if (!pre) return;
-        var wrapper = pre.parentElement;
 
         var container = document.createElement("div");
         container.className = "mermaid orionbelt-mermaid-rendered";
         container.dataset.mermaidSource = source;
         container.textContent = source;
 
-        // Replace the entire code block wrapper if it looks like one
-        // (contains the pre and possibly the language label / copy button)
-        var target = wrapper && wrapper.querySelector("pre") === pre ? wrapper : pre;
+        // Replace the entire Chainlit code block wrapper
+        var target = block.wrapper.querySelector("pre") === block.pre
+          ? block.wrapper : block.pre;
         target.parentElement.replaceChild(container, target);
       });
-      // Let Mermaid process all unprocessed .mermaid elements
+
       try {
         mermaid.run({ querySelector: ".mermaid:not([data-processed])" });
-      } catch (_) { /* ignore if no elements */ }
+      } catch (err) { console.error("[OrionBelt] Mermaid render error:", err); }
     }
 
     // Watch for new code blocks as messages stream in
