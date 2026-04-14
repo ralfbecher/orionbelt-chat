@@ -16,6 +16,14 @@ from pydantic_ai.messages import (
     TextPartDelta,
 )
 
+from src.agent import make_agent
+from src.chart_renderer import render_chart_if_present
+from src.file_downloads import extract_downloads_from_response, extract_downloads_from_tool_results
+from src.mcp_servers import get_mcp_servers_named
+from src.mermaid_renderer import extract_mermaid_from_tool_results
+from src.providers import PROVIDER_LABELS, PROVIDER_MODELS, default_model_for
+from src.settings import settings
+
 logger = logging.getLogger(__name__)
 
 # Maximum characters to display in a Chainlit tool-call step output.
@@ -23,13 +31,6 @@ logger = logging.getLogger(__name__)
 # overwhelm the WebSocket/browser and stall the agent loop.  The model
 # still receives the full content via pydantic-ai's internal history.
 STEP_OUTPUT_LIMIT = 10_000
-
-from src.agent import make_agent
-from src.chart_renderer import render_chart_if_present
-from src.file_downloads import extract_downloads_from_response, extract_downloads_from_tool_results
-from src.mcp_servers import get_mcp_servers_named
-from src.providers import PROVIDER_LABELS, PROVIDER_MODELS, default_model_for
-from src.settings import settings
 
 
 # ── Chainlit Chat Settings (sidebar UI) ───────────────────────────────────
@@ -403,7 +404,7 @@ async def on_message(message: cl.Message):
                     if type(part).__name__ == "ToolReturnPart":
                         raw = getattr(part, "content", "")
                         # content may be str, dict, or list — flatten to string for URI detection
-                        content = json.dumps(raw) if isinstance(raw, (dict, list)) else str(raw)
+                        content = json.dumps(raw) if isinstance(raw, dict | list) else str(raw)
                         logger.info(
                             "ToolReturnPart [%s] (%d chars): %.200s",
                             getattr(part, "tool_name", "?"),
@@ -423,11 +424,20 @@ async def on_message(message: cl.Message):
                 elements=chart_elements,
             ).send()
 
+        # ── Mermaid diagram rendering ──────────────────────────────
+        # If tool results contain Mermaid syntax and the LLM response
+        # doesn't already include a mermaid code block, send it so
+        # the client-side Mermaid.js renderer picks it up.
+        if result_messages and "```mermaid" not in response_msg.content:
+            for diagram in extract_mermaid_from_tool_results(result_messages):
+                logger.info("Sending Mermaid diagram (%d chars)", len(diagram))
+                await cl.Message(content=f"```mermaid\n{diagram}\n```").send()
+
     except BaseException as e:
         # BaseException catches asyncio.CancelledError (Python 3.9+)
         # which Chainlit may raise on WebSocket disconnect / timeout.
         logger.exception("Error in message handler")
-        if isinstance(e, (KeyboardInterrupt, SystemExit)):
+        if isinstance(e, KeyboardInterrupt | SystemExit):
             raise
 
         # Detect MCP session termination and attempt automatic reconnection

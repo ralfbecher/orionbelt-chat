@@ -121,6 +121,60 @@
   }, true);  // capture phase — fire before React
 })();
 
+// Render ```mermaid code blocks as diagrams via Mermaid.js CDN
+(function mermaidRenderer() {
+  var script = document.createElement("script");
+  script.src = "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js";
+  script.onload = function () {
+    var isDark = document.documentElement.classList.contains("dark");
+    mermaid.initialize({ startOnLoad: false, theme: isDark ? "dark" : "default" });
+
+    // Re-initialize theme when dark mode toggles
+    new MutationObserver(function () {
+      var dark = document.documentElement.classList.contains("dark");
+      mermaid.initialize({ startOnLoad: false, theme: dark ? "dark" : "default" });
+      // Re-render existing diagrams with new theme
+      document.querySelectorAll(".orionbelt-mermaid-rendered").forEach(function (el) {
+        delete el.dataset.mermaidRendered;
+        el.removeAttribute("data-processed");
+        el.innerHTML = el.dataset.mermaidSource || el.textContent;
+      });
+      renderMermaidBlocks();
+    }).observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
+
+    function renderMermaidBlocks() {
+      // Chainlit renders fenced code blocks as <code class="language-mermaid">
+      var blocks = document.querySelectorAll("code.language-mermaid");
+      blocks.forEach(function (codeEl) {
+        if (codeEl.dataset.mermaidRendered) return;
+        codeEl.dataset.mermaidRendered = "true";
+
+        var pre = codeEl.parentElement;
+        if (!pre || pre.tagName !== "PRE") return;
+
+        var source = codeEl.textContent;
+        var container = document.createElement("div");
+        container.className = "mermaid orionbelt-mermaid-rendered";
+        container.dataset.mermaidSource = source;
+        container.textContent = source;
+        pre.parentElement.replaceChild(container, pre);
+      });
+      // Let Mermaid process all unprocessed .mermaid elements
+      try {
+        mermaid.run({ querySelector: ".mermaid:not([data-processed])" });
+      } catch (_) { /* ignore if no elements */ }
+    }
+
+    // Watch for new code blocks as messages stream in
+    new MutationObserver(function () { renderMermaidBlocks(); })
+      .observe(document.body, { childList: true, subtree: true });
+
+    // Initial pass
+    renderMermaidBlocks();
+  };
+  document.head.appendChild(script);
+})();
+
 // Arrow Up in empty input → recall last user message (shell-style history)
 (function arrowUpRecall() {
   var messageHistory = [];

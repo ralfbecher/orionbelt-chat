@@ -69,4 +69,17 @@ a[href*="issues"] img {
   filter: grayscale(1) opacity(0.5);
 }
 
+/* Mermaid diagram containers */
+.orionbelt-mermaid-rendered {
+  display: flex;
+  justify-content: center;
+  padding: 1rem 0;
+  overflow-x: auto;
+}
+
+.orionbelt-mermaid-rendered svg {
+  max-width: 100%;
+  height: auto;
+}
+
 
