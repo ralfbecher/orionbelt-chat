@@ -1,11 +1,25 @@
 """Tests for src.chart_renderer."""
 
-import base64
-from unittest.mock import AsyncMock, patch
+import json
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.chart_renderer import UI_URI_PATTERN, _wrap_chart, render_chart_if_present
+from src.chart_renderer import UI_URI_PATTERN, PlotlyChart, _extract_plotly_json, render_chart_if_present
+
+
+@pytest.fixture(autouse=True)
+def _mock_chainlit_context():
+    """Provide a fake Chainlit context so PlotlyChart can be instantiated."""
+    from chainlit.context import context_var
+
+    mock_ctx = MagicMock()
+    mock_ctx.session.thread_id = "test-thread"
+    mock_ctx.session.id = "test-session"
+    mock_ctx.session.files = {}
+    token = context_var.set(mock_ctx)
+    yield
+    context_var.reset(token)
 
 
 class TestUiUriPattern:
@@ -29,25 +43,50 @@ class TestUiUriPattern:
         assert match.group(0) == "ui://chart/1"
 
 
-class TestWrapChart:
-    def test_returns_iframe(self):
-        result = _wrap_chart("<h1>Chart</h1>")
-        assert "<iframe" in result
-        assert "sandbox=" in result
+class TestExtractPlotlyJson:
+    def test_data_key(self):
+        text = json.dumps({"data": [{"type": "bar", "x": [1], "y": [2]}], "layout": {"title": "T"}})
+        result = _extract_plotly_json(text)
+        assert result is not None
+        obj = json.loads(result)
+        assert obj["data"][0]["type"] == "bar"
+        assert obj["layout"]["title"] == "T"
 
-    def test_base64_encodes_html(self):
-        html = "<h1>Test</h1>"
-        result = _wrap_chart(html)
-        encoded = base64.b64encode(html.encode()).decode()
-        assert encoded in result
+    def test_traces_key(self):
+        text = json.dumps({"traces": [{"x": [1], "y": [2]}], "layout": {}})
+        result = _extract_plotly_json(text)
+        assert result is not None
+        obj = json.loads(result)
+        assert len(obj["data"]) == 1
 
-    def test_custom_height(self):
-        result = _wrap_chart("<div/>", height=600)
-        assert '600px' in result
+    def test_embedded_in_html(self):
+        html = '<html><body><script>var fig = {"data": [{"type": "scatter"}], "layout": {}};</script></body></html>'
+        result = _extract_plotly_json(html)
+        assert result is not None
+        obj = json.loads(result)
+        assert obj["data"][0]["type"] == "scatter"
 
-    def test_default_height(self):
-        result = _wrap_chart("<div/>")
-        assert '480px' in result
+    def test_plotly_newplot(self):
+        js = 'Plotly.newPlot("chart", [{"type": "bar", "x": [1], "y": [2]}], {"title": "T"})'
+        result = _extract_plotly_json(js)
+        assert result is not None
+        obj = json.loads(result)
+        assert obj["data"][0]["type"] == "bar"
+        assert obj["layout"]["title"] == "T"
+
+    def test_bare_trace_array(self):
+        text = '[{"type": "bar", "x": [1, 2], "y": [3, 4]}]'
+        result = _extract_plotly_json(text)
+        assert result is not None
+        obj = json.loads(result)
+        assert len(obj["data"]) == 1
+
+    def test_no_match(self):
+        assert _extract_plotly_json("just plain text") is None
+
+    def test_non_plotly_json(self):
+        text = json.dumps({"name": "test", "value": 42})
+        assert _extract_plotly_json(text) is None
 
 
 class TestRenderChartIfPresent:
@@ -58,22 +97,31 @@ class TestRenderChartIfPresent:
         assert result is None
 
     @pytest.mark.asyncio
-    async def test_with_uri_fetches_resource(self):
+    async def test_with_uri_returns_plotly_chart(self):
         server = AsyncMock()
-        server.read_resource = AsyncMock(return_value="<h1>Chart</h1>")
-        mock_text = object()  # sentinel
-        with patch("src.chart_renderer.cl.Text", return_value=mock_text) as text_cls:
-            result = await render_chart_if_present("see ui://chart/sales", server)
-            assert result is mock_text
-            server.read_resource.assert_called_once_with("ui://chart/sales")
-            text_cls.assert_called_once()
-            call_kwargs = text_cls.call_args[1]
-            assert "iframe" in call_kwargs["content"]
-            assert call_kwargs["display"] == "inline"
+        fig = json.dumps({"data": [{"type": "bar", "x": [1], "y": [2]}], "layout": {}})
+        server.read_resource = AsyncMock(return_value=f"<html><script>{fig}</script></html>")
+        result = await render_chart_if_present("see ui://chart/sales", server)
+        assert isinstance(result, PlotlyChart)
+        assert result.type == "plotly"
+        server.read_resource.assert_called_once_with("ui://chart/sales")
 
     @pytest.mark.asyncio
     async def test_server_error_returns_none(self):
         server = AsyncMock()
         server.read_resource = AsyncMock(side_effect=Exception("not found"))
+        result = await render_chart_if_present("see ui://chart/sales", server)
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_no_read_resource_returns_none(self):
+        server = object()  # no read_resource attribute
+        result = await render_chart_if_present("see ui://chart/sales", server)
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_unparseable_resource_returns_none(self):
+        server = AsyncMock()
+        server.read_resource = AsyncMock(return_value="<html>no plotly data</html>")
         result = await render_chart_if_present("see ui://chart/sales", server)
         assert result is None

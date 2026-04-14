@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 from pydantic_ai.mcp import MCPServerStdio, MCPServerStreamableHTTP
 
-from src.mcp_servers import _is_url, _make_server, get_mcp_servers, get_mcp_servers_named
+from src.mcp_servers import _is_url, _make_server, get_mcp_servers_named
 
 
 class TestIsUrl:
@@ -34,37 +34,14 @@ class TestMakeServer:
         assert isinstance(server, MCPServerStdio)
 
 
-class TestGetMcpServers:
-    def test_empty_config_returns_empty(self):
-        with patch("src.mcp_servers.settings") as mock_settings:
-            mock_settings.analytics_server_dir = ""
-            mock_settings.semantic_layer_server_dir = ""
-            assert get_mcp_servers() == []
-
-    def test_one_configured(self):
-        with patch("src.mcp_servers.settings") as mock_settings:
-            mock_settings.analytics_server_dir = "http://localhost:8001/mcp"
-            mock_settings.semantic_layer_server_dir = ""
-            servers = get_mcp_servers()
-            assert len(servers) == 1
-            assert isinstance(servers[0], MCPServerStreamableHTTP)
-
-    def test_both_configured(self):
-        with patch("src.mcp_servers.settings") as mock_settings:
-            mock_settings.analytics_server_dir = "http://localhost:8001/mcp"
-            mock_settings.semantic_layer_server_dir = "/opt/semantic-layer"
-            servers = get_mcp_servers()
-            assert len(servers) == 2
-
-
 class TestGetMcpServersNamed:
-    def test_empty_config(self):
+    def test_empty_config_returns_empty(self):
         with patch("src.mcp_servers.settings") as mock_settings:
             mock_settings.analytics_server_dir = ""
             mock_settings.semantic_layer_server_dir = ""
             assert get_mcp_servers_named() == []
 
-    def test_returns_name_server_pairs(self):
+    def test_one_configured(self):
         with patch("src.mcp_servers.settings") as mock_settings:
             mock_settings.analytics_server_dir = "http://localhost:8001/mcp"
             mock_settings.semantic_layer_server_dir = ""
@@ -74,7 +51,14 @@ class TestGetMcpServersNamed:
             assert name == "OrionBelt Analytics"
             assert isinstance(server, MCPServerStreamableHTTP)
 
-    def test_both_names(self):
+    def test_both_configured(self):
+        with patch("src.mcp_servers.settings") as mock_settings:
+            mock_settings.analytics_server_dir = "http://localhost:8001/mcp"
+            mock_settings.semantic_layer_server_dir = "/opt/semantic-layer"
+            result = get_mcp_servers_named()
+            assert len(result) == 2
+
+    def test_returns_name_server_pairs(self):
         with patch("src.mcp_servers.settings") as mock_settings:
             mock_settings.analytics_server_dir = "/opt/analytics"
             mock_settings.semantic_layer_server_dir = "/opt/semantic"

@@ -25,11 +25,6 @@ _SERVER_DEFS: list[tuple[str, str, str]] = [
 ]
 
 
-def get_mcp_servers() -> list[MCPServerStreamableHTTP | MCPServerStdio]:
-    """Return list of configured MCP servers. Skips servers with empty config."""
-    return [s for _, s in get_mcp_servers_named()]
-
-
 def get_mcp_servers_named() -> list[tuple[str, MCPServerStreamableHTTP | MCPServerStdio]]:
     """Return (display_name, server) pairs for configured MCP servers."""
     servers = []
