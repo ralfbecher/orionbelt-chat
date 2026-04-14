@@ -7,7 +7,7 @@
 
 <p align="center"><strong>AI-powered chat interface for OrionBelt Analytics & Semantic Layer</strong></p>
 
-[![Version](https://img.shields.io/badge/version-0.5.0-brightgreen.svg)](https://github.com/ralfbecher/orionbelt-chat)
+[![Version](https://img.shields.io/badge/version-1.0.0-brightgreen.svg)](https://github.com/ralfbecher/orionbelt-chat)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![License: BSL 1.1](https://img.shields.io/badge/License-BSL_1.1-orange.svg)](https://github.com/ralfbecher/orionbelt-chat/blob/main/LICENSE)
 [![Chainlit](https://img.shields.io/badge/Chainlit-2.10+-blue)](https://chainlit.io)
@@ -21,9 +21,24 @@ A production-ready chat application that connects to OrionBelt Analytics and Ori
 
 > **Better Together:** Works seamlessly with [**OrionBelt Analytics**](https://github.com/ralfbecher/orionbelt-analytics) and [**OrionBelt Semantic Layer**](https://github.com/ralfbecher/orionbelt-semantic-layer). Connect to both MCP servers simultaneously for schema-aware ontology generation, semantic modeling, guaranteed-correct SQL compilation, and interactive chart rendering.
 
-## 🌟 Key Features
+<p align="center">
+  <img src="https://raw.githubusercontent.com/ralfbecher/orionbelt-chat/main/assets/OrionBelt_Chat_1_Start.jpg" alt="OrionBelt Chat — Startup with connected MCP servers" width="800">
+</p>
+<p align="center"><em>Startup — connected MCP servers, provider & model selection</em></p>
 
-### 🤖 Multi-Provider LLM Support
+<p align="center">
+  <img src="https://raw.githubusercontent.com/ralfbecher/orionbelt-chat/main/assets/OrionBelt_Chat_2_Ontology.jpg" alt="OrionBelt Chat — Ontology generation pipeline with file download" width="800">
+</p>
+<p align="center"><em>Full pipeline — schema analysis, ontology generation, semantic enrichment & file download</em></p>
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/ralfbecher/orionbelt-chat/main/assets/OrionBelt_Chat_3_Charts.jpg" alt="OrionBelt Chat — Interactive Plotly charts" width="800">
+</p>
+<p align="center"><em>Interactive charts — heatmap, line & grouped bar rendered natively via Plotly.js</em></p>
+
+## Key Features
+
+### Multi-Provider LLM Support
 
 - **OpenRouter** - Access 300+ models via single API (recommended for production)
 - **MLX** - Local inference on Apple Silicon with mlx-openai-server
@@ -31,39 +46,46 @@ A production-ready chat application that connects to OrionBelt Analytics and Ori
 - **Anthropic** - Direct API access (bypass OpenRouter)
 - **OpenAI** - Direct API access (bypass OpenRouter)
 
-### 🔧 MCP Integration
+### MCP Integration
 
 - **Dual MCP server support** - Connect to Analytics and Semantic Layer simultaneously
 - **Graceful degradation** - One unreachable server won't block the app; agent starts with available servers
+- **Auto-reconnection** - Detects MCP session loss and reconnects automatically
 - **Flexible transport** - Stdio (local subprocess) or Streamable HTTP (remote) per server
 - **Tool visibility** - Collapsible steps show tool calls with arguments and results
 - **Multi-turn context** - Full conversation history management with Pydantic AI
 
-### 📊 Interactive Charts
+### Interactive Charts
 
-- **MCP Apps rendering** - Inline Plotly charts via ui:// resource URIs
-- **Sandboxed iframes** - Secure chart rendering with base64 data URIs
+- **Native Plotly rendering** - Charts render inline via Chainlit's bundled Plotly.js (no Python plotly package needed)
+- **FastMCP Apps integration** - Fetches chart data from `ui://` resource URIs returned by MCP tools
 - **Multiple chart types** - Bar, line, scatter, heatmap with auto-detection
-- **Auto-format detection** - Time series data automatically switches to line charts
+- **Multiple extraction strategies** - Handles Plotly figure dicts, `Plotly.newPlot()` in HTML, and bare trace arrays
 
-### ⚡ Real-Time Streaming
+### File Downloads
 
-- **Token-by-token streaming** - Smooth response rendering as model generates
+- **Auto-detection** - Recognizes downloadable content in tool results and LLM response code blocks
+- **Supported formats** - Turtle/RDF (.ttl), JSON, CSV, SQL, SPARQL, YAML, XML
+- **Smart extraction** - Handles dict-shaped tool returns (e.g. `{'success': True, 'content': '@prefix ...'}`)
+- **Inline attachments** - Download buttons appear directly in the response message
+
+### Real-Time Streaming
+
+- **Token-by-token streaming** - Smooth response rendering as the model generates
 - **Thinking indicator** - Visual spinner while the model processes before responding
 - **Tool call tracking** - Visual feedback for each MCP tool invocation with correct result matching
 - **Stop generation** - Click the stop button or press **Escape** to cancel
 - **Error handling** - Graceful failures with clear error messages
 
-### 🎨 Chainlit UI
+### Chainlit UI
 
 - **Settings panel** - Switch providers and models on the fly; header updates live
 - **Custom model input** - Override default models with specific versions
 - **Customizable system prompt** - Edit `system_prompt.md` or set `SYSTEM_PROMPT_FILE` env var
-- **Message recall** - Press **Arrow Up** in empty input to recall previous messages
-- **Message history** - Persistent conversation context across sessions
+- **Message recall** - Press **Arrow Up/Down** in the input to navigate message history
 - **Responsive design** - Works on desktop and mobile browsers
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Prerequisites
 
@@ -160,7 +182,7 @@ uv run chainlit run app.py --watch
 
 Open **http://localhost:8080** in your browser.
 
-## 📖 Usage Examples
+## Usage Examples
 
 **Connect to database:**
 
@@ -180,6 +202,12 @@ Analyze the schema and show me all tables with their relationships
 Show me revenue by product category as a bar chart
 ```
 
+**Download an ontology:**
+
+```
+Generate an ontology for the schema and download it as Turtle
+```
+
 **Explore semantic models:**
 
 ```
@@ -192,7 +220,7 @@ What OBML models are available in the semantic layer?
 Create an OBML model for customer analytics with metrics for revenue, order count, and average order value
 ```
 
-## 🏗️ Architecture
+## Architecture
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/ralfbecher/orionbelt-chat/main/assets/architecture.png" alt="OrionBelt Chat Architecture" width="800">
@@ -206,15 +234,15 @@ Create an OBML model for customer analytics with metrics for revenue, order coun
 │  │  Chat UI │         │  Pydantic AI Agent + MCP Client  │   │
 │  │          │────────>│  - Multi-turn context            │   │
 │  │ Chainlit │         │  - Streaming events              │   │
-│  │  2.0+    │         │  - Tool orchestration            │   │
+│  │  2.10+   │         │  - Tool orchestration            │   │
 │  └──────────┘         └──────────────────────────────────┘   │
 └──────────────────────────────────────────────────────────────┘
          │                      │
          │                      ├──> orionbelt-analytics (MCP stdio or HTTP)
          │                      │    - Schema analysis
-         │                      │    - Ontology generation
+         │                      │    - Ontology generation & download
          │                      │    - SQL execution
-         │                      │    - Interactive charts
+         │                      │    - Interactive Plotly charts
          │                      │
          │                      └──> orionbelt-semantic-layer (MCP stdio or HTTP)
          │                           - OBML model management
@@ -229,9 +257,10 @@ Create an OBML model for customer analytics with metrics for revenue, order coun
 - **Chainlit 2.10+** - Chat UI framework with streaming, steps, and settings
 - **Pydantic AI 1.77+** - Agent framework with node-by-node iteration (`agent.iter()`)
 - **MCP Transport** - Stdio (local subprocess) or Streamable HTTP (remote) per server
-- **Chart Renderer** - MCP Apps ui:// resource handler with iframe sandboxing
+- **Chart Renderer** - Native Plotly rendering from FastMCP Apps `ui://` resources
+- **File Downloads** - Auto-detect downloadable content (TTL, JSON, CSV, SQL) in tool results
 
-## 🛠️ Development
+## Development
 
 ```bash
 # Install dev dependencies
@@ -247,7 +276,7 @@ uv run ruff format
 uv run ruff check --fix
 ```
 
-## 📦 Provider Details
+## Provider Details
 
 ### OpenRouter
 
@@ -297,13 +326,13 @@ uv run ruff check --fix
 - **Setup**: Download from [ollama.com](https://ollama.com)
 - **Notes**: Built-in tool calling support with instruct models
 
-## 🐛 Troubleshooting
+## Troubleshooting
 
 ### MCP servers not connecting
 
 **Symptom:** Status message shows "Failed to connect" for one or more servers
 
-The app starts even when some servers are unreachable — it will show which connected and which failed.
+The app starts even when some servers are unreachable — it will show which connected and which failed. If a session drops mid-conversation, the app automatically reconnects.
 
 **Solutions:**
 
@@ -319,9 +348,9 @@ The app starts even when some servers are unreachable — it will show which con
 **Solutions:**
 
 - Verify `orionbelt-analytics` has MCP Apps support (v1.2.0+)
-- Check browser console for iframe or CSP errors
-- Ensure chart data is valid JSON in tool result
-- Verify analytics server returned ui:// resource URI
+- Check server logs for `Chart URI detected` and `Plotly JSON extracted` messages
+- Ensure the analytics server returns a `ui://` resource URI in the tool result
+- Verify the resource content contains parseable Plotly figure data
 
 ### MLX model not calling tools
 
@@ -346,7 +375,7 @@ The app starts even when some servers are unreachable — it will show which con
 - Increase timeout settings if using slow local models
 - Check the server console for detailed logs (each node transition is logged)
 
-## 📄 License
+## License
 
 Licensed under the **Business Source License 1.1** (BSL 1.1).
 
@@ -357,7 +386,7 @@ Licensed under the **Business Source License 1.1** (BSL 1.1).
 
 See [LICENSE](./LICENSE) for full terms.
 
-## 🔗 Links
+## Links
 
 ### OrionBelt Platform
 
