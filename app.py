@@ -388,6 +388,20 @@ async def on_message(message: cl.Message):
         history_chars // 1000,
         message.content,
     )
+    # Log history structure for debugging context issues
+    if msg_history:
+        for i, m in enumerate(msg_history):
+            parts_info = []
+            for p in getattr(m, "parts", []):
+                kind = type(p).__name__
+                content = getattr(p, "content", "")
+                content_len = len(str(content)) if content else 0
+                tool = getattr(p, "tool_name", "")
+                if tool:
+                    parts_info.append(f"{kind}({tool},{content_len}c)")
+                else:
+                    parts_info.append(f"{kind}({content_len}c)")
+            logger.info("  history[%d] %s: %s", i, type(m).__name__, " | ".join(parts_info))
 
     try:
         text_parts: list[str] = []
@@ -450,6 +464,12 @@ async def on_message(message: cl.Message):
                                             pass
 
                                     logger.info("Tool call [%s]: %s(%s)", call_id, tool_name, tool_args)
+                                    if isinstance(tool_args, dict):
+                                        for k, v in tool_args.items():
+                                            vlen = len(str(v)) if v else 0
+                                            logger.info("  arg %s: %s (%d chars)", k, type(v).__name__, vlen)
+                                    if tool_name == "load_model" and not tool_args:
+                                        logger.warning("load_model called with EMPTY args — model failed to compose YAML")
 
                                     step = cl.Step(name=tool_name, type="tool", parent_id=_run_step_id)
                                     step.input = (
