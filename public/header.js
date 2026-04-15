@@ -217,7 +217,9 @@
           }
           el = el.parentElement;
         }
-        target.parentElement.replaceChild(container, target);
+        try {
+          target.parentElement.replaceChild(container, target);
+        } catch (_) { /* DOM may have been mutated by another observer */ }
       });
 
       try {
