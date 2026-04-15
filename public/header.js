@@ -1,6 +1,6 @@
 // Inject OrionBelt logo, app name, and version badge into the Chainlit header
 (function injectHeader() {
-  var VERSION = "v1.0.1";
+  var VERSION = "v1.0.2";
   var LOGO_DARK = "/public/logo_w.png";
   var LOGO_LIGHT = "/public/logo.png";
   var APP_NAME = "Chat";
@@ -217,7 +217,9 @@
           }
           el = el.parentElement;
         }
-        target.parentElement.replaceChild(container, target);
+        try {
+          target.parentElement.replaceChild(container, target);
+        } catch (_) { /* DOM may have been mutated by another observer */ }
       });
 
       try {

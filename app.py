@@ -1,5 +1,6 @@
 """OrionBelt Chat - Chainlit + Pydantic AI application entry point."""
 
+import copy
 import json
 import logging
 
@@ -227,6 +228,74 @@ async def on_settings_update(settings_values: dict):
 # ── Message handler ────────────────────────────────────────────────────────
 
 
+# ── History trimming ──────────────────────────────────────────────────────
+
+# Maximum characters to keep for a single tool result in older history messages.
+# Recent messages (last HISTORY_KEEP_RECENT) are never trimmed.
+TOOL_RESULT_TRIM_LIMIT = 500
+HISTORY_KEEP_RECENT = 6  # keep last N messages untrimmed
+
+
+def _trim_history(messages: list) -> list:
+    """Return a copy of *messages* with old, large tool results truncated.
+
+    This frees up context window for the model so it can compose complex
+    tool arguments (like full OBML YAML) without drowning in earlier results.
+    Only ``ToolReturnPart`` content in messages older than the last
+    ``HISTORY_KEEP_RECENT`` is truncated.
+    """
+    if not messages or len(messages) <= HISTORY_KEEP_RECENT:
+        return messages
+
+    cutoff = len(messages) - HISTORY_KEEP_RECENT
+    trimmed = []
+    trimmed_count = 0
+
+    for idx, msg in enumerate(messages):
+        if idx >= cutoff:
+            # Recent messages — keep untouched
+            trimmed.append(msg)
+            continue
+
+        parts = getattr(msg, "parts", None)
+        if parts is None:
+            trimmed.append(msg)
+            continue
+
+        needs_trim = False
+        for part in parts:
+            if type(part).__name__ == "ToolReturnPart":
+                content = getattr(part, "content", "")
+                if isinstance(content, str) and len(content) > TOOL_RESULT_TRIM_LIMIT:
+                    needs_trim = True
+                    break
+
+        if not needs_trim:
+            trimmed.append(msg)
+            continue
+
+        # Deep-copy the message so we don't mutate the stored history
+        msg_copy = copy.deepcopy(msg)
+        new_parts = []
+        for part in msg_copy.parts:
+            if type(part).__name__ == "ToolReturnPart":
+                content = getattr(part, "content", "")
+                if isinstance(content, str) and len(content) > TOOL_RESULT_TRIM_LIMIT:
+                    part.content = (
+                        content[:TOOL_RESULT_TRIM_LIMIT]
+                        + f"\n\n… (trimmed — {len(content):,} chars total)"
+                    )
+                    trimmed_count += 1
+            new_parts.append(part)
+        msg_copy.parts = new_parts
+        trimmed.append(msg_copy)
+
+    if trimmed_count:
+        logger.info("Trimmed %d old tool results to save context space.", trimmed_count)
+
+    return trimmed
+
+
 # ── MCP reconnection helpers ──────────────────────────────────────────────
 
 _MCP_ERROR_PHRASES = (
@@ -296,8 +365,9 @@ async def on_message(message: cl.Message):
         ).send()
         return
 
-    # Get message history for multi-turn context
-    msg_history = cl.user_session.get("pydantic_history")
+    # Get message history for multi-turn context.
+    # Trim old tool results to free context for the model.
+    msg_history = _trim_history(cl.user_session.get("pydantic_history") or [])
 
     # The @cl.on_message decorator wraps this handler in an "on_message" Step
     # via local_steps. All Steps must be children of that wrapper so they render
@@ -311,13 +381,27 @@ async def on_message(message: cl.Message):
     tool_steps: dict[str, cl.Step] = {}  # tool_call_id → Step
     result_messages = None
 
-    history_chars = sum(len(str(m)) for m in msg_history) if msg_history else 0
+    history_chars = sum(len(str(m)) for m in msg_history)
     logger.info(
         "Message received (%d history messages, ~%dk chars): %.100s",
-        len(msg_history) if msg_history else 0,
+        len(msg_history),
         history_chars // 1000,
         message.content,
     )
+    # Log history structure for debugging context issues
+    if msg_history:
+        for i, m in enumerate(msg_history):
+            parts_info = []
+            for p in getattr(m, "parts", []):
+                kind = type(p).__name__
+                content = getattr(p, "content", "")
+                content_len = len(str(content)) if content else 0
+                tool = getattr(p, "tool_name", "")
+                if tool:
+                    parts_info.append(f"{kind}({tool},{content_len}c)")
+                else:
+                    parts_info.append(f"{kind}({content_len}c)")
+            logger.info("  history[%d] %s: %s", i, type(m).__name__, " | ".join(parts_info))
 
     try:
         text_parts: list[str] = []
@@ -325,7 +409,7 @@ async def on_message(message: cl.Message):
 
         async with agent.iter(
             message.content,
-            message_history=msg_history,
+            message_history=msg_history or None,
         ) as agent_run:
             async for node in agent_run:
                 node_name = type(node).__name__
@@ -380,6 +464,12 @@ async def on_message(message: cl.Message):
                                             pass
 
                                     logger.info("Tool call [%s]: %s(%s)", call_id, tool_name, tool_args)
+                                    if isinstance(tool_args, dict):
+                                        for k, v in tool_args.items():
+                                            vlen = len(str(v)) if v else 0
+                                            logger.info("  arg %s: %s (%d chars)", k, type(v).__name__, vlen)
+                                    if tool_name == "load_model" and not tool_args:
+                                        logger.warning("load_model called with EMPTY args — model failed to compose YAML")
 
                                     step = cl.Step(name=tool_name, type="tool", parent_id=_run_step_id)
                                     step.input = (
