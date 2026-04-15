@@ -311,9 +311,11 @@ async def on_message(message: cl.Message):
     tool_steps: dict[str, cl.Step] = {}  # tool_call_id → Step
     result_messages = None
 
+    history_chars = sum(len(str(m)) for m in msg_history) if msg_history else 0
     logger.info(
-        "Message received (%d history messages): %.100s",
+        "Message received (%d history messages, ~%dk chars): %.100s",
         len(msg_history) if msg_history else 0,
+        history_chars // 1000,
         message.content,
     )
 

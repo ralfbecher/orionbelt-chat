@@ -22,9 +22,11 @@ compiles to correct, validated SQL.
 
 ### 3. Create an OBML semantic model (OrionBelt Semantic Layer)
 - Always call `get_obml_reference` first to learn the correct OBML YAML syntax
-- Sketch an OBML model defining dataObjects, dimensions, measures, metrics, and joins
-  based on the ontology and schema knowledge gathered above
-- Validate with `validate_model`, then load with `load_model`
+- Compose a **complete OBML YAML document** defining dataObjects, dimensions, measures,
+  metrics, and joins based on the ontology and schema knowledge gathered above
+- Validate with `validate_model(model_yaml=<full YAML>)`, then load with
+  `load_model(model_yaml=<full YAML>)` — both require the complete YAML string as the
+  `model_yaml` argument; do NOT call them with empty arguments
 - Explore the model: `describe_model`, `list_dimensions`, `list_measures`,
   `list_metrics`, `get_model_diagram`, `get_join_graph`
 
