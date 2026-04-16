@@ -57,6 +57,15 @@ PROVIDER_MODELS = {
 }
 
 
+def models_for(provider: str) -> list[str]:
+    """Return model list for the UI dropdown, including the env-configured default."""
+    curated = list(PROVIDER_MODELS.get(provider, []))
+    env_default = default_model_for(provider)
+    if env_default and env_default not in curated:
+        curated.insert(0, env_default)
+    return curated
+
+
 def resolve_model(provider: str, model: str):
     """
     Return a Pydantic AI model object for the given provider + model name.
