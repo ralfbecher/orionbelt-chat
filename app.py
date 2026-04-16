@@ -22,7 +22,7 @@ from src.chart_renderer import render_chart_if_present
 from src.file_downloads import extract_downloads_from_response, extract_downloads_from_tool_results
 from src.mcp_servers import get_mcp_servers_named
 from src.mermaid_renderer import extract_mermaid_from_tool_results
-from src.providers import PROVIDER_LABELS, PROVIDER_MODELS, default_model_for
+from src.providers import PROVIDER_LABELS, default_model_for, models_for
 from src.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -37,21 +37,23 @@ STEP_OUTPUT_LIMIT = 10_000
 # ── Chainlit Chat Settings (sidebar UI) ───────────────────────────────────
 
 
-def build_chat_settings() -> list[cl.input_widget.InputWidget]:
+def build_chat_settings(provider: str | None = None) -> list[cl.input_widget.InputWidget]:
     """Define the settings panel shown in the Chainlit sidebar."""
+    prov = provider or settings.default_provider
+    model_list = models_for(prov)
     return [
         Select(
             id="provider",
             label="LLM Provider",
             values=list(PROVIDER_LABELS.keys()),
-            initial_value=settings.default_provider,
+            initial_value=prov,
             tooltip="Select your AI provider",
         ),
         Select(
             id="model",
             label="Model",
-            values=PROVIDER_MODELS.get(settings.default_provider, []),
-            initial_value=default_model_for(settings.default_provider),
+            values=model_list,
+            initial_value=default_model_for(prov),
         ),
         TextInput(
             id="custom_model",
@@ -182,6 +184,22 @@ async def on_end():
 # ── Settings change handler ────────────────────────────────────────────────
 
 
+@cl.on_settings_edit
+async def on_settings_edit(settings_values: dict):
+    """
+    Fires on-the-fly while the user edits any widget in the settings panel
+    (before clicking Confirm).  When the provider dropdown changes, re-send
+    the ChatSettings with the matching model list so the Model dropdown
+    updates immediately.
+    """
+    new_provider = settings_values.get("provider")
+    if not new_provider:
+        return
+    prev_provider = cl.user_session.get("provider", settings.default_provider)
+    if new_provider != prev_provider:
+        await cl.ChatSettings(build_chat_settings(new_provider)).send()
+
+
 @cl.on_settings_update
 async def on_settings_update(settings_values: dict):
     """
@@ -191,6 +209,13 @@ async def on_settings_update(settings_values: dict):
     provider = settings_values.get("provider", settings.default_provider)
     custom_model = (settings_values.get("custom_model") or "").strip()
     selected_model = settings_values.get("model", default_model_for(provider))
+
+    # If the selected model doesn't belong to the new provider, fall back
+    # to that provider's env-configured default (safety net).
+    provider_models = models_for(provider)
+    if not custom_model and selected_model not in provider_models:
+        selected_model = default_model_for(provider)
+
     model = custom_model if custom_model else selected_model
 
     cl.user_session.set("provider", provider)
