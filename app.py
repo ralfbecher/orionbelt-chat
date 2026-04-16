@@ -184,6 +184,22 @@ async def on_end():
 # ── Settings change handler ────────────────────────────────────────────────
 
 
+@cl.on_settings_edit
+async def on_settings_edit(settings_values: dict):
+    """
+    Fires on-the-fly while the user edits any widget in the settings panel
+    (before clicking Confirm).  When the provider dropdown changes, re-send
+    the ChatSettings with the matching model list so the Model dropdown
+    updates immediately.
+    """
+    new_provider = settings_values.get("provider")
+    if not new_provider:
+        return
+    prev_provider = cl.user_session.get("provider", settings.default_provider)
+    if new_provider != prev_provider:
+        await cl.ChatSettings(build_chat_settings(new_provider)).send()
+
+
 @cl.on_settings_update
 async def on_settings_update(settings_values: dict):
     """
@@ -195,15 +211,12 @@ async def on_settings_update(settings_values: dict):
     selected_model = settings_values.get("model", default_model_for(provider))
 
     # If the selected model doesn't belong to the new provider, fall back
-    # to that provider's env-configured default and refresh the panel.
+    # to that provider's env-configured default (safety net).
     provider_models = models_for(provider)
     if not custom_model and selected_model not in provider_models:
         selected_model = default_model_for(provider)
 
     model = custom_model if custom_model else selected_model
-
-    # Re-send ChatSettings so the model dropdown reflects the new provider
-    await cl.ChatSettings(build_chat_settings(provider)).send()
 
     cl.user_session.set("provider", provider)
     cl.user_session.set("model", model)
