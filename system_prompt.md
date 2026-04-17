@@ -10,7 +10,9 @@ compiles to correct, validated SQL.
 ### 1. Discover the database (OrionBelt Analytics)
 
 - Connect with `connect_database` and explore with `list_schemas`, `analyze_schema`
-- Inspect individual tables with `get_table_details` and `sample_table_data`
+- `analyze_schema` already returns table structure and foreign keys — only use
+  `get_table_details` or `sample_table_data` when the user asks to inspect a
+  specific table or you need to resolve an ambiguity
 - Use GraphRAG tools (`initialize_graphrag`, `graphrag_search`,
   `graphrag_find_join_path`) for intelligent schema navigation
 
