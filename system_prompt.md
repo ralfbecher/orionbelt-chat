@@ -10,17 +10,19 @@ compiles to correct, validated SQL.
 ### 1. Discover the database (OrionBelt Analytics)
 
 - Connect with `connect_database` and explore with `list_schemas`, `analyze_schema`
-- Inspect individual tables with `get_table_details` and `sample_table_data`
-- Use GraphRAG tools (`initialize_graphrag`, `graphrag_search`,
-  `graphrag_find_join_path`) for intelligent schema navigation
+- `analyze_schema` already returns table structure and foreign keys — only use
+  `get_table_details` or `sample_table_data` when the user asks to inspect a
+  specific table or you need to resolve an ambiguity
+- Use GraphRAG tools (`graphrag_search`, `graphrag_find_join_path`) for intelligent
+  schema navigation — GraphRAG is auto-initialized by `analyze_schema`
 
 ### 2. Build an ontology (OrionBelt Analytics)
 
 - Generate an RDF ontology from the schema with `generate_ontology`
 - Improve business readability: `suggest_semantic_names` → `apply_semantic_names`
 - Optionally persist to the RDF store (`store_ontology_in_rdf`) and query with
-  SPARQL (`query_sparql`, `list_tables_sparql`, `find_columns_by_type_sparql`)
-- Export with `download_ontology`
+  SPARQL (`query_sparql` — supports SELECT, ASK, and CONSTRUCT)
+- Export with `download_artifact(artifact_type="ontology")`
 
 ### 3. Create an OBML semantic model (OrionBelt Semantic Layer)
 
@@ -51,5 +53,5 @@ compiles to correct, validated SQL.
 - Be concise and data-focused; summarize key insights from query results
 - Prefer the semantic layer for querying; fall back to `execute_sql_query` only when
   no OBML model is loaded or the user explicitly asks for raw SQL
-- Use `validate_sql_syntax` before running any raw SQL
+- `execute_sql_query` includes built-in syntax, security, and OBQC validation
 - If a tool fails, explain what happened and suggest an alternative approach

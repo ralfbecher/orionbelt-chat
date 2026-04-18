@@ -260,27 +260,50 @@ async def on_settings_update(settings_values: dict):
 TOOL_RESULT_TRIM_LIMIT = 500
 HISTORY_KEEP_RECENT = 6  # keep last N messages untrimmed
 
+# Transient tools whose results are consumed once and not needed later in the
+# analytical journey.  These are trimmed more aggressively (even in recent
+# messages) to free context for structural results the model needs to retain.
+_TRANSIENT_TOOLS: set[str] = {
+    "sample_table_data",
+    "get_table_details",
+    "suggest_semantic_names",
+    "get_obml_reference",
+    "validate_model",
+    "connect_database",
+    "list_schemas",
+}
+_TRANSIENT_TRIM_LIMIT = 200
+
+
+def _trim_limit_for_tool(tool_name: str | None, is_recent: bool) -> int | None:
+    """Return the char limit for a tool result, or None to keep it intact."""
+    if tool_name in _TRANSIENT_TOOLS:
+        return _TRANSIENT_TRIM_LIMIT
+    if not is_recent:
+        return TOOL_RESULT_TRIM_LIMIT
+    return None
+
 
 def _trim_history(messages: list) -> list:
     """Return a copy of *messages* with old, large tool results truncated.
 
     This frees up context window for the model so it can compose complex
     tool arguments (like full OBML YAML) without drowning in earlier results.
-    Only ``ToolReturnPart`` content in messages older than the last
-    ``HISTORY_KEEP_RECENT`` is truncated.
+
+    Transient tool results (exploratory data, one-shot references) are trimmed
+    aggressively regardless of age.  Structural tool results (schema analysis,
+    model descriptions, query results) are only trimmed when they fall outside
+    the recent window.
     """
-    if not messages or len(messages) <= HISTORY_KEEP_RECENT:
+    if not messages:
         return messages
 
-    cutoff = len(messages) - HISTORY_KEEP_RECENT
+    cutoff = max(0, len(messages) - HISTORY_KEEP_RECENT)
     trimmed = []
     trimmed_count = 0
 
     for idx, msg in enumerate(messages):
-        if idx >= cutoff:
-            # Recent messages — keep untouched
-            trimmed.append(msg)
-            continue
+        is_recent = idx >= cutoff
 
         parts = getattr(msg, "parts", None)
         if parts is None:
@@ -290,33 +313,38 @@ def _trim_history(messages: list) -> list:
         needs_trim = False
         for part in parts:
             if type(part).__name__ == "ToolReturnPart":
-                content = getattr(part, "content", "")
-                if isinstance(content, str) and len(content) > TOOL_RESULT_TRIM_LIMIT:
-                    needs_trim = True
-                    break
+                tool_name = getattr(part, "tool_name", None)
+                limit = _trim_limit_for_tool(tool_name, is_recent)
+                if limit is not None:
+                    content = getattr(part, "content", "")
+                    if isinstance(content, str) and len(content) > limit:
+                        needs_trim = True
+                        break
 
         if not needs_trim:
             trimmed.append(msg)
             continue
 
-        # Deep-copy the message so we don't mutate the stored history
         msg_copy = copy.deepcopy(msg)
         new_parts = []
         for part in msg_copy.parts:
             if type(part).__name__ == "ToolReturnPart":
-                content = getattr(part, "content", "")
-                if isinstance(content, str) and len(content) > TOOL_RESULT_TRIM_LIMIT:
-                    part.content = (
-                        content[:TOOL_RESULT_TRIM_LIMIT]
-                        + f"\n\n… (trimmed — {len(content):,} chars total)"
-                    )
-                    trimmed_count += 1
+                tool_name = getattr(part, "tool_name", None)
+                limit = _trim_limit_for_tool(tool_name, is_recent)
+                if limit is not None:
+                    content = getattr(part, "content", "")
+                    if isinstance(content, str) and len(content) > limit:
+                        part.content = (
+                            content[:limit]
+                            + f"\n\n… (trimmed — {len(content):,} chars total)"
+                        )
+                        trimmed_count += 1
             new_parts.append(part)
         msg_copy.parts = new_parts
         trimmed.append(msg_copy)
 
     if trimmed_count:
-        logger.info("Trimmed %d old tool results to save context space.", trimmed_count)
+        logger.info("Trimmed %d tool results to save context space.", trimmed_count)
 
     return trimmed
 
