@@ -587,6 +587,15 @@ async def on_message(message: cl.Message, *, _retried: bool = False):
                                         result_content[:200],
                                     )
 
+                                    if any(phrase in result_content for phrase in _MCP_ERROR_PHRASES):
+                                        logger.warning("MCP session error in tool result: %s", result_content[:200])
+                                        step = tool_steps.pop(call_id, None)
+                                        if step:
+                                            step.output = result_content
+                                            await step.update()
+                                        needs_reconnect = True
+                                        break
+
                                     step = tool_steps.pop(call_id, None)
                                     if step:
                                         display_text = result_text or ("(image)" if result_binaries else "")
@@ -625,6 +634,9 @@ async def on_message(message: cl.Message, *, _retried: bool = False):
                             text_parts.append(f"\n\nTool error: {tool_err}")
                         break
                     logger.info("Tool calls complete.")
+
+                if needs_reconnect:
+                    break
 
             # Capture full message history while the run context is still open.
             # Even when the run didn't complete (tool error → break), preserve
