@@ -1,6 +1,6 @@
 // Inject OrionBelt logo, app name, and version badge into the Chainlit header
 (function injectHeader() {
-  var VERSION = "v1.1.1";
+  var VERSION = "v1.1.2";
   var LOGO_DARK = "/public/logo_w.png";
   var LOGO_LIGHT = "/public/logo.png";
   var APP_NAME = "Chat";
