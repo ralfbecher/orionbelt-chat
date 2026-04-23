@@ -20,7 +20,7 @@ from pydantic_ai.messages import (
 )
 
 from src.agent import make_agent
-from src.chart_renderer import render_chart_if_present
+from src.chart_renderer import UI_URI_PATTERN, render_chart_if_present
 from src.file_downloads import extract_downloads_from_response, extract_downloads_from_tool_results
 from src.mcp_servers import get_mcp_servers_named
 from src.mermaid_renderer import extract_mermaid_from_tool_results
@@ -670,11 +670,15 @@ async def on_message(message: cl.Message, *, _retried: bool = False):
                                     )
 
                                     if any(phrase in result_content for phrase in _MCP_ERROR_PHRASES):
-                                        logger.warning("MCP session error in tool result: %s", result_content[:200])
+                                        logger.warning("MCP session error detected in tool result — will reconnect: %s", result_content[:200])
                                         step = tool_steps.pop(call_id, None)
                                         if step:
                                             step.output = result_content
                                             await step.update()
+                                        for cid, s in list(tool_steps.items()):
+                                            s.output = "Cancelled (session lost)"
+                                            await s.update()
+                                        tool_steps.clear()
                                         needs_reconnect = True
                                         break
 
@@ -735,10 +739,14 @@ async def on_message(message: cl.Message, *, _retried: bool = False):
             except Exception:
                 logger.warning("Agent run ended without recoverable history.")
 
-        logger.debug("Agent context closed.")
+        logger.info("Agent context closed. needs_reconnect=%s, _retried=%s", needs_reconnect, _retried)
 
         if needs_reconnect:
-            if await _reconnect_mcp() and not _retried:
+            logger.info("Triggering MCP reconnection …")
+            reconnected = await _reconnect_mcp()
+            logger.info("Reconnection result: %s", reconnected)
+            if reconnected and not _retried:
+                logger.info("Retrying user message after reconnection …")
                 await on_message(message, _retried=True)
                 return
 
@@ -769,6 +777,7 @@ async def on_message(message: cl.Message, *, _retried: bool = False):
             cl.user_session.set("pydantic_history", result_messages)
 
         # ── Chart rendering ─────────────────────────────────────
+        chart_had_uri = False
         if result_messages:
             current_agent = cl.user_session.get("agent") or agent
             mcp_servers = [s for s in current_agent.toolsets if hasattr(s, "read_resource")]
@@ -787,14 +796,23 @@ async def on_message(message: cl.Message, *, _retried: bool = False):
                             len(content),
                             content[:200],
                         )
+                        if UI_URI_PATTERN.search(content):
+                            chart_had_uri = True
                         for server in mcp_servers:
                             chart_el = await render_chart_if_present(content, server)
                             if chart_el:
                                 chart_elements.append(chart_el)
                                 break
 
+        # If chart URIs were found but interactive rendering failed on all
+        # servers, a session may be stale — reconnect for future requests.
+        if chart_had_uri and not chart_elements and not needs_reconnect:
+            logger.warning("Chart URI found but rendering failed — reconnecting stale MCP sessions")
+            await _reconnect_mcp()
+
         if not chart_elements and fallback_images:
             chart_elements = fallback_images
+
         if chart_elements:
             logger.info("Sending %d chart elements", len(chart_elements))
             await cl.Message(
