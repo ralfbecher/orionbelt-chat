@@ -16,6 +16,7 @@ from chainlit.element import Element, ElementType
 logger = logging.getLogger(__name__)
 
 UI_URI_PATTERN = re.compile(r"ui://[^\s\"']+")
+CHART_JSON_URI_PATTERN = re.compile(r"ui://\S*chart-json/[^\s\"']+")
 
 
 
@@ -90,25 +91,62 @@ def _extract_plotly_json(text: str) -> str | None:
     return None
 
 
+def _apply_defaults(fig: dict) -> str:
+    """Apply display defaults and return serialised JSON."""
+    layout = fig.setdefault("layout", {})
+    layout.setdefault("autosize", True)
+    layout.setdefault("width", 900)
+    layout.setdefault("height", 550)
+    margin = layout.setdefault("margin", {})
+    margin.setdefault("t", 40)
+    layout.setdefault("legend", {})
+    fig.setdefault("config", {"displaylogo": False})
+    return json.dumps(fig)
+
+
 async def render_chart_if_present(
     tool_result_text: str,
     mcp_server,
 ) -> PlotlyChart | None:
-    """Detect a ``ui://`` resource URI (FastMCP Apps) in tool result text.
+    """Render a Plotly chart from MCP tool result text.
 
-    Fetches the resource via the MCP server, extracts Plotly figure data,
-    and returns a :class:`PlotlyChart` element for native rendering.
+    Tries the ``chart-json`` resource URI first (direct JSON, no parsing),
+    then falls back to fetching the ``ui://`` HTML resource and extracting
+    the Plotly figure data.
     """
+    if not hasattr(mcp_server, "read_resource"):
+        logger.warning("Server %s has no read_resource method", type(mcp_server).__name__)
+        return None
+
+    # Fast path: fetch JSON resource directly (no HTML parsing)
+    json_match = CHART_JSON_URI_PATTERN.search(tool_result_text)
+    if json_match:
+        json_uri = json_match.group(0)
+        try:
+            resource_content = await mcp_server.read_resource(json_uri)
+            content_str = str(resource_content) if not isinstance(resource_content, str) else resource_content
+            fig = json.loads(content_str)
+            if isinstance(fig, dict) and "data" in fig:
+                fig_json = _apply_defaults(fig)
+                logger.info("Plotly JSON from chart-json resource (%d chars)", len(fig_json))
+                return PlotlyChart(name="chart", content=fig_json, display="inline")
+        except Exception as e:
+            logger.debug("chart-json resource fetch failed, falling back to HTML: %s", e)
+
+    # Fallback: fetch ui:// HTML resource and extract Plotly data
     match = UI_URI_PATTERN.search(tool_result_text)
     if not match:
         return None
 
-    uri = match.group(0)
-    logger.info("Chart URI detected: %s (server: %s)", uri, type(mcp_server).__name__)
-
-    if not hasattr(mcp_server, "read_resource"):
-        logger.warning("Server %s has no read_resource method", type(mcp_server).__name__)
+    # Find the first non-JSON ui:// URI (the HTML chart resource)
+    uri = None
+    for m in UI_URI_PATTERN.finditer(tool_result_text):
+        if "chart-json/" not in m.group(0):
+            uri = m.group(0)
+            break
+    if not uri:
         return None
+    logger.info("Chart URI detected: %s (server: %s)", uri, type(mcp_server).__name__)
 
     try:
         resource_content = await mcp_server.read_resource(uri)
@@ -122,19 +160,8 @@ async def render_chart_if_present(
         fig_json = _extract_plotly_json(content_str)
         if fig_json:
             fig = json.loads(fig_json)
-            layout = fig.setdefault("layout", {})
-            layout.setdefault("autosize", True)
-            layout.setdefault("width", 900)
-            layout.setdefault("height", 550)
-            margin = layout.setdefault("margin", {})
-            margin.setdefault("t", 40)
-            layout.setdefault("legend", {})
-            fig.setdefault("config", {
-                "displaylogo": False,
-            })
-            fig_json = json.dumps(fig)
-            logger.debug("Chart layout modebar: %s", layout.get("modebar"))
-            logger.info("Plotly JSON extracted (%d chars)", len(fig_json))
+            fig_json = _apply_defaults(fig)
+            logger.info("Plotly JSON extracted from HTML (%d chars)", len(fig_json))
             return PlotlyChart(name="chart", content=fig_json, display="inline")
         else:
             logger.warning("No Plotly JSON found in resource content")
