@@ -82,8 +82,13 @@ a[href*="issues"] img {
   height: auto;
 }
 
-/* Plotly chart containers — override Chainlit default 600×400 */
-div:has(> .js-plotly-plot) {
-  max-width: 100% !important;
-  height: 550px !important;
+/* Plotly modebar — solid background so toolbar icons don't bleed into legend */
+.js-plotly-plot .plotly .modebar-container {
+  background: #fff !important;
+  border-radius: 4px;
 }
+
+.dark .js-plotly-plot .plotly .modebar-container {
+  background: rgb(31, 41, 55) !important;
+}
+
