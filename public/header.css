@@ -82,13 +82,33 @@ a[href*="issues"] img {
   height: auto;
 }
 
-/* Plotly modebar — solid background so toolbar icons don't bleed into legend */
+/* Plotly modebar — make toolbar a visible row above the chart */
 .js-plotly-plot .plotly .modebar-container {
-  background: #fff !important;
-  border-radius: 4px;
+  position: relative !important;
+  display: flex !important;
+  justify-content: flex-end !important;
+  background: #f9f9f9 !important;
+  border-bottom: 1px solid #eee !important;
+  padding: 4px 8px !important;
+  width: 100% !important;
+  height: auto !important;
+}
+
+.js-plotly-plot .plotly .modebar {
+  position: relative !important;
+  display: flex !important;
+  flex-direction: row !important;
+  top: auto !important;
+  right: auto !important;
+}
+
+.js-plotly-plot .plotly .modebar-group {
+  display: flex !important;
+  flex-direction: row !important;
 }
 
 .dark .js-plotly-plot .plotly .modebar-container {
   background: rgb(31, 41, 55) !important;
+  border-bottom-color: rgb(55, 65, 81) !important;
 }
 
