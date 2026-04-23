@@ -467,6 +467,7 @@ async def on_message(message: cl.Message):
 
     chart_elements: list = []
     fallback_images: list = []
+    needs_reconnect = False
     response_msg = cl.Message(content="")
     response_sent = False
     tool_steps: dict[str, cl.Step] = {}  # tool_call_id → Step
@@ -613,9 +614,8 @@ async def on_message(message: cl.Message):
                             await step.update()
                         tool_steps.clear()
 
-                        # Check the full exception chain for MCP session errors
                         if _is_mcp_session_error(tool_err):
-                            await _reconnect_mcp()
+                            needs_reconnect = True
                         else:
                             text_parts.append(f"\n\nTool error: {tool_err}")
                         break
@@ -634,6 +634,9 @@ async def on_message(message: cl.Message):
                 logger.warning("Agent run ended without recoverable history.")
 
         logger.debug("Agent context closed.")
+
+        if needs_reconnect:
+            await _reconnect_mcp()
 
         # Send the response message AFTER all steps so it appears below them
         response_msg.content = "".join(text_parts)
