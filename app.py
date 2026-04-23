@@ -770,7 +770,8 @@ async def on_message(message: cl.Message, *, _retried: bool = False):
 
         # ── Chart rendering ─────────────────────────────────────
         if result_messages:
-            mcp_servers = [s for s in agent.toolsets if hasattr(s, "read_resource")]
+            current_agent = cl.user_session.get("agent") or agent
+            mcp_servers = [s for s in current_agent.toolsets if hasattr(s, "read_resource")]
             logger.info(
                 "Chart scan: %d messages, %d MCP servers with read_resource",
                 len(result_messages), len(mcp_servers),
