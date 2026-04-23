@@ -1,5 +1,6 @@
 """OrionBelt Chat - Chainlit + Pydantic AI application entry point."""
 
+import asyncio
 import copy
 import json
 import logging
@@ -33,6 +34,7 @@ logger = logging.getLogger(__name__)
 # overwhelm the WebSocket/browser and stall the agent loop.  The model
 # still receives the full content via pydantic-ai's internal history.
 STEP_OUTPUT_LIMIT = 10_000
+TOOL_CALL_TIMEOUT = 120  # seconds
 
 
 def _split_tool_content(raw) -> tuple[str, list[BinaryContent]]:
@@ -548,7 +550,7 @@ async def on_message(message: cl.Message, *, _retried: bool = False):
                 elif Agent.is_call_tools_node(node):
                     logger.info("Processing tool calls …")
                     try:
-                        async with node.stream(agent_run.ctx) as stream:
+                        async with asyncio.timeout(TOOL_CALL_TIMEOUT), node.stream(agent_run.ctx) as stream:
                             async for event in stream:
                                 if isinstance(event, FunctionToolCallEvent):
                                     tool_name = event.part.tool_name
@@ -616,12 +618,15 @@ async def on_message(message: cl.Message, *, _retried: bool = False):
                                                 display="inline",
                                                 mime=binary.media_type,
                                             ))
+                    except TimeoutError:
+                        logger.warning("Tool call timed out after %ds", TOOL_CALL_TIMEOUT)
+                        for call_id, step in list(tool_steps.items()):
+                            step.output = "Timed out"
+                            await step.update()
+                        tool_steps.clear()
+                        needs_reconnect = True
+                        break
                     except Exception as tool_err:
-                        # pydantic-ai's ModelRetry / max-retries-exceeded can
-                        # leak through node.stream() instead of being handled
-                        # internally.  The graph never sets _next_node, so
-                        # continuing the loop would raise a second error.
-                        # Close any open UI steps and break out of the loop.
                         logger.warning("Tool execution error: %s", tool_err)
                         for call_id, step in list(tool_steps.items()):
                             step.output = f"Error: {tool_err}"
