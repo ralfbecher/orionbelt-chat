@@ -412,8 +412,11 @@ def _is_mcp_session_error(exc: BaseException) -> bool:
     return False
 
 
-async def _reconnect_mcp() -> None:
-    """Attempt MCP reconnection and inform the user."""
+async def _reconnect_mcp() -> bool:
+    """Attempt MCP reconnection and inform the user.
+
+    Returns True if reconnection succeeded.
+    """
     logger.warning("MCP session lost — attempting reconnection …")
     await cl.Message(
         content="MCP server connection lost. Reconnecting …",
@@ -424,21 +427,23 @@ async def _reconnect_mcp() -> None:
     if await _init_agent(provider, model):
         mcp_info = cl.user_session.get("mcp_info", "")
         await cl.Message(
-            content=f"Reconnected. {mcp_info}\n\nPlease resend your message.",
+            content=f"Reconnected. {mcp_info}",
             author="System",
         ).send()
+        return True
     else:
         await cl.Message(
             content="Reconnection failed. Check that MCP servers are running.",
             author="System",
         ).send()
+        return False
 
 
 # ── Message handler ────────────────────────────────────────────────────────
 
 
 @cl.on_message
-async def on_message(message: cl.Message):
+async def on_message(message: cl.Message, *, _retried: bool = False):
     """
     Main handler. Iterates the Pydantic AI agent graph node-by-node,
     streaming text deltas and showing tool call steps in the Chainlit UI.
@@ -636,7 +641,9 @@ async def on_message(message: cl.Message):
         logger.debug("Agent context closed.")
 
         if needs_reconnect:
-            await _reconnect_mcp()
+            if await _reconnect_mcp() and not _retried:
+                await on_message(message, _retried=True)
+                return
 
         # Send the response message AFTER all steps so it appears below them
         response_msg.content = "".join(text_parts)
@@ -715,7 +722,9 @@ async def on_message(message: cl.Message):
 
         try:
             if _is_mcp_session_error(e):
-                await _reconnect_mcp()
+                if await _reconnect_mcp() and not _retried:
+                    await on_message(message, _retried=True)
+                    return
             else:
                 await cl.Message(
                     content=f"Error: {e}",
