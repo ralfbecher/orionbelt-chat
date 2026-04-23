@@ -131,9 +131,9 @@ async def render_chart_if_present(
             layout.setdefault("legend", {})
             fig.setdefault("config", {
                 "displaylogo": False,
-                "modeBarButtonsToRemove": [
-                    "select2d", "lasso2d", "zoomIn2d", "zoomOut2d",
-                ],
+                "modeBarButtons": [[
+                    "toImage", "zoom2d", "pan2d", "resetScale2d",
+                ]],
             })
             fig_json = json.dumps(fig)
             logger.debug("Chart layout modebar: %s", layout.get("modebar"))
