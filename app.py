@@ -742,8 +742,8 @@ async def on_message(message: cl.Message, *, _retried: bool = False):
         logger.info("Agent context closed. needs_reconnect=%s, _retried=%s", needs_reconnect, _retried)
 
         if needs_reconnect:
-            logger.info("Triggering MCP reconnection …")
-            reconnected = await _reconnect_mcp()
+            logger.info("Triggering full MCP reconnection …")
+            reconnected = await _full_reconnect_mcp()
             logger.info("Reconnection result: %s", reconnected)
             if reconnected and not _retried:
                 logger.info("Retrying user message after reconnection …")
@@ -808,8 +808,10 @@ async def on_message(message: cl.Message, *, _retried: bool = False):
         response_sent = True
         logger.debug("Response message sent.")
 
-        # Save message history for next turn
-        if result_messages is not None:
+        # Save message history for next turn — skip when the run was
+        # interrupted by a session error to avoid persisting incomplete
+        # tool calls that would block the next turn.
+        if result_messages is not None and not needs_reconnect:
             cl.user_session.set("pydantic_history", result_messages)
 
         if chart_elements:
