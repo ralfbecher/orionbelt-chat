@@ -87,8 +87,7 @@ a[href*="issues"] img {
   position: relative !important;
   display: flex !important;
   justify-content: flex-end !important;
-  background: #f9f9f9 !important;
-  border-bottom: 1px solid #eee !important;
+  background: transparent !important;
   padding: 4px 8px !important;
   width: 100% !important;
   height: auto !important;
