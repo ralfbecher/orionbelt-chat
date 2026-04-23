@@ -129,7 +129,14 @@ async def render_chart_if_present(
             margin = layout.setdefault("margin", {})
             margin.setdefault("t", 40)
             layout.setdefault("legend", {})
+            fig.setdefault("config", {
+                "displaylogo": False,
+                "modeBarButtonsToRemove": [
+                    "select2d", "lasso2d", "zoomIn2d", "zoomOut2d",
+                ],
+            })
             fig_json = json.dumps(fig)
+            logger.debug("Chart layout modebar: %s", layout.get("modebar"))
             logger.info("Plotly JSON extracted (%d chars)", len(fig_json))
             return PlotlyChart(name="chart", content=fig_json, display="inline")
         else:
