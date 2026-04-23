@@ -1,5 +1,6 @@
 """OrionBelt Chat - Chainlit + Pydantic AI application entry point."""
 
+import asyncio
 import copy
 import json
 import logging
@@ -9,6 +10,7 @@ from chainlit.context import local_steps
 from chainlit.input_widget import Select, TextInput
 from pydantic_ai import Agent
 from pydantic_ai.messages import (
+    BinaryContent,
     FunctionToolCallEvent,
     FunctionToolResultEvent,
     PartDeltaEvent,
@@ -18,7 +20,7 @@ from pydantic_ai.messages import (
 )
 
 from src.agent import make_agent
-from src.chart_renderer import render_chart_if_present
+from src.chart_renderer import UI_URI_PATTERN, render_chart_if_present
 from src.file_downloads import extract_downloads_from_response, extract_downloads_from_tool_results
 from src.mcp_servers import get_mcp_servers_named
 from src.mermaid_renderer import extract_mermaid_from_tool_results
@@ -32,6 +34,43 @@ logger = logging.getLogger(__name__)
 # overwhelm the WebSocket/browser and stall the agent loop.  The model
 # still receives the full content via pydantic-ai's internal history.
 STEP_OUTPUT_LIMIT = 10_000
+TOOL_CALL_TIMEOUT = 120  # seconds
+
+
+def _split_tool_content(raw) -> tuple[str, list[BinaryContent]]:
+    """Split tool return content into a text string and binary parts.
+
+    Pydantic AI tool results may contain BinaryContent (e.g. BinaryImage)
+    mixed with strings inside a list.  Returns the text portion (JSON-
+    serialised for dicts/lists, str() otherwise) and any binary objects.
+    """
+    binaries: list[BinaryContent] = []
+    if isinstance(raw, BinaryContent):
+        return "", [raw]
+    if isinstance(raw, list):
+        text_parts = []
+        for item in raw:
+            if isinstance(item, BinaryContent):
+                binaries.append(item)
+            else:
+                text_parts.append(item)
+        if text_parts:
+            if any(isinstance(p, (dict, list)) for p in text_parts):
+                try:
+                    text = json.dumps(text_parts)
+                except TypeError:
+                    text = "\n".join(str(p) for p in text_parts)
+            else:
+                text = "\n".join(str(p) for p in text_parts)
+        else:
+            text = ""
+        return text, binaries
+    if isinstance(raw, dict):
+        try:
+            return json.dumps(raw), binaries
+        except TypeError:
+            return str(raw), binaries
+    return str(raw), binaries
 
 
 # ── Chainlit Chat Settings (sidebar UI) ───────────────────────────────────
@@ -113,7 +152,7 @@ async def _init_agent(provider: str, model: str) -> bool:
         True if agent was created (even with partial MCP connectivity)
     """
     # Close previously connected MCP servers
-    for ctx in cl.user_session.get("mcp_contexts") or []:
+    for _name, ctx in cl.user_session.get("mcp_contexts") or []:
         try:
             await ctx.__aexit__(None, None, None)
         except Exception:
@@ -123,7 +162,7 @@ async def _init_agent(provider: str, model: str) -> bool:
     connected = []
     connected_names = []
     failed_names = []
-    active_contexts = []
+    active_contexts: list[tuple[str, object]] = []
 
     # Connect each MCP server individually
     for name, server in named_servers:
@@ -131,23 +170,13 @@ async def _init_agent(provider: str, model: str) -> bool:
             await server.__aenter__()
             connected.append(server)
             connected_names.append(name)
-            active_contexts.append(server)
+            active_contexts.append((name, server))
             logger.info("MCP server connected: %s", name)
         except Exception as e:
             logger.warning("MCP server failed: %s — %s", name, e)
             failed_names.append((name, e))
 
-    # Build MCP status info
-    parts = []
-    if connected_names:
-        server_list = "\n".join(f"- `{n}`" for n in connected_names)
-        parts.append(f"Connected MCP servers:\n{server_list}")
-    if failed_names:
-        fail_list = "\n".join(f"- `{n}`: {e}" for n, e in failed_names)
-        parts.append(f"Failed to connect:\n{fail_list}")
-    if not named_servers:
-        parts.append("No MCP servers configured.")
-    cl.user_session.set("mcp_info", "\n\n".join(parts))
+    _update_mcp_info(connected_names, failed_names)
 
     # Create agent with whatever servers connected
     try:
@@ -165,6 +194,20 @@ async def _init_agent(provider: str, model: str) -> bool:
         return False
 
 
+def _update_mcp_info(connected_names: list[str], failed_names: list[tuple[str, Exception]] | None = None):
+    """Update the mcp_info session variable."""
+    parts = []
+    if connected_names:
+        server_list = "\n".join(f"- `{n}`" for n in connected_names)
+        parts.append(f"Connected MCP servers:\n{server_list}")
+    if failed_names:
+        fail_list = "\n".join(f"- `{n}`: {e}" for n, e in failed_names)
+        parts.append(f"Failed to connect:\n{fail_list}")
+    if not connected_names and not failed_names:
+        parts.append("No MCP servers configured.")
+    cl.user_session.set("mcp_info", "\n\n".join(parts))
+
+
 @cl.on_stop
 async def on_stop():
     """Called when the user clicks the stop button or presses Escape."""
@@ -174,7 +217,7 @@ async def on_stop():
 @cl.on_chat_end
 async def on_end():
     """Clean up MCP server subprocesses when session ends."""
-    for ctx in cl.user_session.get("mcp_contexts") or []:
+    for _name, ctx in cl.user_session.get("mcp_contexts") or []:
         try:
             await ctx.__aexit__(None, None, None)
         except Exception:
@@ -363,6 +406,14 @@ _MCP_ERROR_PHRASES = (
     "stream has been closed",
 )
 
+_MCP_ERROR_TYPES = (
+    ConnectionError,
+    ConnectionResetError,
+    BrokenPipeError,
+    EOFError,
+    OSError,
+)
+
 
 def _is_mcp_session_error(exc: BaseException) -> bool:
     """Walk the exception chain looking for MCP / connection-loss signals."""
@@ -371,37 +422,110 @@ def _is_mcp_session_error(exc: BaseException) -> bool:
         text = str(cur)
         if any(phrase in text for phrase in _MCP_ERROR_PHRASES):
             return True
+        if isinstance(cur, _MCP_ERROR_TYPES):
+            return True
+        # Empty exception message from MCP transport failures
+        if not text.strip() and type(cur).__module__ and "mcp" in type(cur).__module__:
+            return True
         cur = cur.__cause__ if cur.__cause__ is not cur else None
+    # Empty error with no cause — likely a transport-level failure
+    if not str(exc).strip():
+        return True
     return False
 
 
-async def _reconnect_mcp() -> None:
-    """Attempt MCP reconnection and inform the user."""
-    logger.warning("MCP session lost — attempting reconnection …")
+async def _reconnect_mcp() -> bool:
+    """Test each MCP server, reconnect only the failed ones.
+
+    Returns True if all servers are healthy after reconnection.
+    """
+    current_contexts: list[tuple[str, object]] = cl.user_session.get("mcp_contexts") or []
+    if not current_contexts:
+        # No servers to reconnect — fall back to full init
+        return await _full_reconnect_mcp()
+
+    healthy: list[tuple[str, object]] = []
+    failed_names: list[str] = []
+
+    for name, server in current_contexts:
+        try:
+            await asyncio.wait_for(server.list_tools(), timeout=5)
+            healthy.append((name, server))
+            logger.info("MCP server healthy: %s", name)
+        except Exception:
+            logger.warning("MCP server down: %s", name)
+            failed_names.append(name)
+            try:
+                await server.__aexit__(None, None, None)
+            except Exception:
+                pass
+
+    if not failed_names:
+        logger.info("All MCP servers healthy — no reconnection needed")
+        return True
+
     await cl.Message(
-        content="MCP server connection lost. Reconnecting …",
+        content=f"MCP server connection lost: {', '.join(failed_names)}. Reconnecting …",
         author="System",
     ).send()
+
+    # Reconnect only failed servers
+    named_servers = get_mcp_servers_named()
+    reconnected: list[str] = []
+    still_failed: list[tuple[str, Exception]] = []
+    for name, server in named_servers:
+        if name not in failed_names:
+            continue
+        try:
+            await server.__aenter__()
+            healthy.append((name, server))
+            reconnected.append(name)
+            logger.info("MCP server reconnected: %s", name)
+        except Exception as e:
+            logger.warning("MCP server reconnect failed: %s — %s", name, e)
+            still_failed.append((name, e))
+
+    connected_names = [n for n, _ in healthy]
+    _update_mcp_info(connected_names, still_failed)
+
+    # Rebuild agent with the mix of healthy + reconnected servers
+    provider = cl.user_session.get("provider")
+    model = cl.user_session.get("model")
+    try:
+        toolsets = [s for _, s in healthy]
+        agent = make_agent(provider, model, toolsets=toolsets)
+        cl.user_session.set("agent", agent)
+        cl.user_session.set("mcp_contexts", healthy)
+    except Exception as e:
+        await cl.Message(content=f"Failed to create agent: {e}", author="System").send()
+        return False
+
+    mcp_info = cl.user_session.get("mcp_info", "")
+    status = f"Reconnected: {', '.join(reconnected)}." if reconnected else ""
+    if still_failed:
+        status += f" Still down: {', '.join(n for n, _ in still_failed)}."
+    await cl.Message(content=f"{status} {mcp_info}".strip(), author="System").send()
+    return not still_failed
+
+
+async def _full_reconnect_mcp() -> bool:
+    """Full reconnection — close everything and reinitialise."""
+    await cl.Message(content="MCP server connection lost. Reconnecting …", author="System").send()
     provider = cl.user_session.get("provider")
     model = cl.user_session.get("model")
     if await _init_agent(provider, model):
         mcp_info = cl.user_session.get("mcp_info", "")
-        await cl.Message(
-            content=f"Reconnected. {mcp_info}\n\nPlease resend your message.",
-            author="System",
-        ).send()
-    else:
-        await cl.Message(
-            content="Reconnection failed. Check that MCP servers are running.",
-            author="System",
-        ).send()
+        await cl.Message(content=f"Reconnected. {mcp_info}", author="System").send()
+        return True
+    await cl.Message(content="Reconnection failed. Check that MCP servers are running.", author="System").send()
+    return False
 
 
 # ── Message handler ────────────────────────────────────────────────────────
 
 
 @cl.on_message
-async def on_message(message: cl.Message):
+async def on_message(message: cl.Message, *, _retried: bool = False):
     """
     Main handler. Iterates the Pydantic AI agent graph node-by-node,
     streaming text deltas and showing tool call steps in the Chainlit UI.
@@ -429,6 +553,8 @@ async def on_message(message: cl.Message):
     _run_step_id = _parent_steps[-1].id if _parent_steps else None
 
     chart_elements: list = []
+    fallback_images: list = []
+    needs_reconnect = False
     response_msg = cl.Message(content="")
     response_sent = False
     tool_steps: dict[str, cl.Step] = {}  # tool_call_id → Step
@@ -504,7 +630,7 @@ async def on_message(message: cl.Message):
                 elif Agent.is_call_tools_node(node):
                     logger.info("Processing tool calls …")
                     try:
-                        async with node.stream(agent_run.ctx) as stream:
+                        async with asyncio.timeout(TOOL_CALL_TIMEOUT), node.stream(agent_run.ctx) as stream:
                             async for event in stream:
                                 if isinstance(event, FunctionToolCallEvent):
                                     tool_name = event.part.tool_name
@@ -532,7 +658,8 @@ async def on_message(message: cl.Message):
                                     tool_steps[call_id] = step
 
                                 elif isinstance(event, FunctionToolResultEvent):
-                                    result_content = str(event.result.content)
+                                    result_text, result_binaries = _split_tool_content(event.result.content)
+                                    result_content = result_text or str(event.result.content)
                                     call_id = event.result.tool_call_id
                                     logger.info(
                                         "Tool result [%s] (%d chars): %s → %s",
@@ -542,35 +669,63 @@ async def on_message(message: cl.Message):
                                         result_content[:200],
                                     )
 
+                                    if any(phrase in result_content for phrase in _MCP_ERROR_PHRASES):
+                                        logger.warning("MCP session error detected in tool result — will reconnect: %s", result_content[:200])
+                                        step = tool_steps.pop(call_id, None)
+                                        if step:
+                                            step.output = result_content
+                                            await step.update()
+                                        for cid, s in list(tool_steps.items()):
+                                            s.output = "Cancelled (session lost)"
+                                            await s.update()
+                                        tool_steps.clear()
+                                        needs_reconnect = True
+                                        break
+
                                     step = tool_steps.pop(call_id, None)
                                     if step:
-                                        if len(result_content) > STEP_OUTPUT_LIMIT:
+                                        display_text = result_text or ("(image)" if result_binaries else "")
+                                        if len(display_text) > STEP_OUTPUT_LIMIT:
                                             step.output = (
-                                                result_content[:STEP_OUTPUT_LIMIT]
-                                                + f"\n\n… (truncated — {len(result_content):,} chars total)"
+                                                display_text[:STEP_OUTPUT_LIMIT]
+                                                + f"\n\n… (truncated — {len(display_text):,} chars total)"
                                             )
                                         else:
-                                            step.output = result_content
+                                            step.output = display_text
                                         await step.update()
+
+                                    for binary in result_binaries:
+                                        if binary.is_image:
+                                            fallback_images.append(cl.Image(
+                                                name="chart",
+                                                content=binary.data,
+                                                display="inline",
+                                                mime=binary.media_type,
+                                            ))
+                    except TimeoutError:
+                        logger.warning("Tool call timed out after %ds", TOOL_CALL_TIMEOUT)
+                        for call_id, step in list(tool_steps.items()):
+                            step.output = "Timed out"
+                            await step.update()
+                        tool_steps.clear()
+                        needs_reconnect = True
+                        break
                     except Exception as tool_err:
-                        # pydantic-ai's ModelRetry / max-retries-exceeded can
-                        # leak through node.stream() instead of being handled
-                        # internally.  The graph never sets _next_node, so
-                        # continuing the loop would raise a second error.
-                        # Close any open UI steps and break out of the loop.
                         logger.warning("Tool execution error: %s", tool_err)
                         for call_id, step in list(tool_steps.items()):
                             step.output = f"Error: {tool_err}"
                             await step.update()
                         tool_steps.clear()
 
-                        # Check the full exception chain for MCP session errors
                         if _is_mcp_session_error(tool_err):
-                            await _reconnect_mcp()
+                            needs_reconnect = True
                         else:
                             text_parts.append(f"\n\nTool error: {tool_err}")
                         break
                     logger.info("Tool calls complete.")
+
+                if needs_reconnect:
+                    break
 
             # Capture full message history while the run context is still open.
             # Even when the run didn't complete (tool error → break), preserve
@@ -584,7 +739,52 @@ async def on_message(message: cl.Message):
             except Exception:
                 logger.warning("Agent run ended without recoverable history.")
 
-        logger.debug("Agent context closed.")
+        logger.info("Agent context closed. needs_reconnect=%s, _retried=%s", needs_reconnect, _retried)
+
+        if needs_reconnect:
+            logger.info("Triggering full MCP reconnection …")
+            reconnected = await _full_reconnect_mcp()
+            logger.info("Reconnection result: %s", reconnected)
+            if reconnected and not _retried:
+                logger.info("Retrying user message after reconnection …")
+                await on_message(message, _retried=True)
+                return
+
+        # ── Chart rendering (before response) ──────────────────
+        if result_messages and not needs_reconnect:
+            current_agent = cl.user_session.get("agent") or agent
+            mcp_servers = [s for s in current_agent.toolsets if hasattr(s, "read_resource")]
+            logger.info(
+                "Chart scan: %d messages, %d MCP servers with read_resource",
+                len(result_messages), len(mcp_servers),
+            )
+            for msg in result_messages:
+                for part in getattr(msg, "parts", []):
+                    if type(part).__name__ == "ToolReturnPart":
+                        raw = getattr(part, "content", "")
+                        content, _ = _split_tool_content(raw)
+                        logger.info(
+                            "ToolReturnPart [%s] (%d chars): %.200s",
+                            getattr(part, "tool_name", "?"),
+                            len(content),
+                            content[:200],
+                        )
+                        if UI_URI_PATTERN.search(content):
+                            for server in mcp_servers:
+                                chart_el = await render_chart_if_present(content, server)
+                                if chart_el:
+                                    chart_elements.append(chart_el)
+                                    break
+                            else:
+                                # All servers failed — likely stale session
+                                if not _retried:
+                                    logger.warning("Chart rendering failed on all servers — reconnecting and retrying")
+                                    if await _reconnect_mcp():
+                                        await on_message(message, _retried=True)
+                                        return
+
+        if not chart_elements and fallback_images:
+            chart_elements = fallback_images
 
         # Send the response message AFTER all steps so it appears below them
         response_msg.content = "".join(text_parts)
@@ -608,34 +808,11 @@ async def on_message(message: cl.Message):
         response_sent = True
         logger.debug("Response message sent.")
 
-        # Save message history for next turn
-        if result_messages is not None:
+        # Save message history for next turn — skip when the run was
+        # interrupted by a session error to avoid persisting incomplete
+        # tool calls that would block the next turn.
+        if result_messages is not None and not needs_reconnect:
             cl.user_session.set("pydantic_history", result_messages)
-
-        # ── Chart rendering ─────────────────────────────────────
-        if result_messages:
-            mcp_servers = [s for s in agent.toolsets if hasattr(s, "read_resource")]
-            logger.info(
-                "Chart scan: %d messages, %d MCP servers with read_resource",
-                len(result_messages), len(mcp_servers),
-            )
-            for msg in result_messages:
-                for part in getattr(msg, "parts", []):
-                    if type(part).__name__ == "ToolReturnPart":
-                        raw = getattr(part, "content", "")
-                        # content may be str, dict, or list — flatten to string for URI detection
-                        content = json.dumps(raw) if isinstance(raw, dict | list) else str(raw)
-                        logger.info(
-                            "ToolReturnPart [%s] (%d chars): %.200s",
-                            getattr(part, "tool_name", "?"),
-                            len(content),
-                            content[:200],
-                        )
-                        for server in mcp_servers:
-                            chart_el = await render_chart_if_present(content, server)
-                            if chart_el:
-                                chart_elements.append(chart_el)
-                                break
 
         if chart_elements:
             logger.info("Sending %d chart elements", len(chart_elements))
@@ -662,7 +839,9 @@ async def on_message(message: cl.Message):
 
         try:
             if _is_mcp_session_error(e):
-                await _reconnect_mcp()
+                if await _reconnect_mcp() and not _retried:
+                    await on_message(message, _retried=True)
+                    return
             else:
                 await cl.Message(
                     content=f"Error: {e}",

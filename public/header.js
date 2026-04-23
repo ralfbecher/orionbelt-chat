@@ -1,6 +1,6 @@
 // Inject OrionBelt logo, app name, and version badge into the Chainlit header
 (function injectHeader() {
-  var VERSION = "v1.1.1";
+  var VERSION = "v1.1.2";
   var LOGO_DARK = "/public/logo_w.png";
   var LOGO_LIGHT = "/public/logo.png";
   var APP_NAME = "Chat";
@@ -235,6 +235,21 @@
     renderMermaidBlocks();
   };
   document.head.appendChild(script);
+})();
+
+// Resize Plotly chart containers — override Chainlit inline styles
+(function plotlyResize() {
+  function resize() {
+    document.querySelectorAll(".js-plotly-plot").forEach(function (plot) {
+      var container = plot.closest("[style]");
+      if (container) {
+        container.style.maxWidth = "100%";
+        container.style.height = "auto";
+      }
+    });
+  }
+  new MutationObserver(resize)
+    .observe(document.body, { childList: true, subtree: true });
 })();
 
 // Arrow Up in empty input → recall last user message (shell-style history)
