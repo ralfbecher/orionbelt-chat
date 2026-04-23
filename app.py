@@ -402,6 +402,14 @@ _MCP_ERROR_PHRASES = (
     "stream has been closed",
 )
 
+_MCP_ERROR_TYPES = (
+    ConnectionError,
+    ConnectionResetError,
+    BrokenPipeError,
+    EOFError,
+    OSError,
+)
+
 
 def _is_mcp_session_error(exc: BaseException) -> bool:
     """Walk the exception chain looking for MCP / connection-loss signals."""
@@ -410,7 +418,15 @@ def _is_mcp_session_error(exc: BaseException) -> bool:
         text = str(cur)
         if any(phrase in text for phrase in _MCP_ERROR_PHRASES):
             return True
+        if isinstance(cur, _MCP_ERROR_TYPES):
+            return True
+        # Empty exception message from MCP transport failures
+        if not text.strip() and type(cur).__module__ and "mcp" in type(cur).__module__:
+            return True
         cur = cur.__cause__ if cur.__cause__ is not cur else None
+    # Empty error with no cause — likely a transport-level failure
+    if not str(exc).strip():
+        return True
     return False
 
 
