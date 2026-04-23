@@ -152,7 +152,7 @@ async def _init_agent(provider: str, model: str) -> bool:
         True if agent was created (even with partial MCP connectivity)
     """
     # Close previously connected MCP servers
-    for ctx in cl.user_session.get("mcp_contexts") or []:
+    for _name, ctx in cl.user_session.get("mcp_contexts") or []:
         try:
             await ctx.__aexit__(None, None, None)
         except Exception:
@@ -162,7 +162,7 @@ async def _init_agent(provider: str, model: str) -> bool:
     connected = []
     connected_names = []
     failed_names = []
-    active_contexts = []
+    active_contexts: list[tuple[str, object]] = []
 
     # Connect each MCP server individually
     for name, server in named_servers:
@@ -170,23 +170,13 @@ async def _init_agent(provider: str, model: str) -> bool:
             await server.__aenter__()
             connected.append(server)
             connected_names.append(name)
-            active_contexts.append(server)
+            active_contexts.append((name, server))
             logger.info("MCP server connected: %s", name)
         except Exception as e:
             logger.warning("MCP server failed: %s — %s", name, e)
             failed_names.append((name, e))
 
-    # Build MCP status info
-    parts = []
-    if connected_names:
-        server_list = "\n".join(f"- `{n}`" for n in connected_names)
-        parts.append(f"Connected MCP servers:\n{server_list}")
-    if failed_names:
-        fail_list = "\n".join(f"- `{n}`: {e}" for n, e in failed_names)
-        parts.append(f"Failed to connect:\n{fail_list}")
-    if not named_servers:
-        parts.append("No MCP servers configured.")
-    cl.user_session.set("mcp_info", "\n\n".join(parts))
+    _update_mcp_info(connected_names, failed_names)
 
     # Create agent with whatever servers connected
     try:
@@ -204,6 +194,20 @@ async def _init_agent(provider: str, model: str) -> bool:
         return False
 
 
+def _update_mcp_info(connected_names: list[str], failed_names: list[tuple[str, Exception]] | None = None):
+    """Update the mcp_info session variable."""
+    parts = []
+    if connected_names:
+        server_list = "\n".join(f"- `{n}`" for n in connected_names)
+        parts.append(f"Connected MCP servers:\n{server_list}")
+    if failed_names:
+        fail_list = "\n".join(f"- `{n}`: {e}" for n, e in failed_names)
+        parts.append(f"Failed to connect:\n{fail_list}")
+    if not connected_names and not failed_names:
+        parts.append("No MCP servers configured.")
+    cl.user_session.set("mcp_info", "\n\n".join(parts))
+
+
 @cl.on_stop
 async def on_stop():
     """Called when the user clicks the stop button or presses Escape."""
@@ -213,7 +217,7 @@ async def on_stop():
 @cl.on_chat_end
 async def on_end():
     """Clean up MCP server subprocesses when session ends."""
-    for ctx in cl.user_session.get("mcp_contexts") or []:
+    for _name, ctx in cl.user_session.get("mcp_contexts") or []:
         try:
             await ctx.__aexit__(None, None, None)
         except Exception:
@@ -431,30 +435,90 @@ def _is_mcp_session_error(exc: BaseException) -> bool:
 
 
 async def _reconnect_mcp() -> bool:
-    """Attempt MCP reconnection and inform the user.
+    """Test each MCP server, reconnect only the failed ones.
 
-    Returns True if reconnection succeeded.
+    Returns True if all servers are healthy after reconnection.
     """
-    logger.warning("MCP session lost — attempting reconnection …")
+    current_contexts: list[tuple[str, object]] = cl.user_session.get("mcp_contexts") or []
+    if not current_contexts:
+        # No servers to reconnect — fall back to full init
+        return await _full_reconnect_mcp()
+
+    healthy: list[tuple[str, object]] = []
+    failed_names: list[str] = []
+
+    for name, server in current_contexts:
+        try:
+            await asyncio.wait_for(server.list_tools(), timeout=5)
+            healthy.append((name, server))
+            logger.info("MCP server healthy: %s", name)
+        except Exception:
+            logger.warning("MCP server down: %s", name)
+            failed_names.append(name)
+            try:
+                await server.__aexit__(None, None, None)
+            except Exception:
+                pass
+
+    if not failed_names:
+        logger.info("All MCP servers healthy — no reconnection needed")
+        return True
+
     await cl.Message(
-        content="MCP server connection lost. Reconnecting …",
+        content=f"MCP server connection lost: {', '.join(failed_names)}. Reconnecting …",
         author="System",
     ).send()
+
+    # Reconnect only failed servers
+    named_servers = get_mcp_servers_named()
+    reconnected: list[str] = []
+    still_failed: list[tuple[str, Exception]] = []
+    for name, server in named_servers:
+        if name not in failed_names:
+            continue
+        try:
+            await server.__aenter__()
+            healthy.append((name, server))
+            reconnected.append(name)
+            logger.info("MCP server reconnected: %s", name)
+        except Exception as e:
+            logger.warning("MCP server reconnect failed: %s — %s", name, e)
+            still_failed.append((name, e))
+
+    connected_names = [n for n, _ in healthy]
+    _update_mcp_info(connected_names, still_failed)
+
+    # Rebuild agent with the mix of healthy + reconnected servers
+    provider = cl.user_session.get("provider")
+    model = cl.user_session.get("model")
+    try:
+        toolsets = [s for _, s in healthy]
+        agent = make_agent(provider, model, toolsets=toolsets)
+        cl.user_session.set("agent", agent)
+        cl.user_session.set("mcp_contexts", healthy)
+    except Exception as e:
+        await cl.Message(content=f"Failed to create agent: {e}", author="System").send()
+        return False
+
+    mcp_info = cl.user_session.get("mcp_info", "")
+    status = f"Reconnected: {', '.join(reconnected)}." if reconnected else ""
+    if still_failed:
+        status += f" Still down: {', '.join(n for n, _ in still_failed)}."
+    await cl.Message(content=f"{status} {mcp_info}".strip(), author="System").send()
+    return not still_failed
+
+
+async def _full_reconnect_mcp() -> bool:
+    """Full reconnection — close everything and reinitialise."""
+    await cl.Message(content="MCP server connection lost. Reconnecting …", author="System").send()
     provider = cl.user_session.get("provider")
     model = cl.user_session.get("model")
     if await _init_agent(provider, model):
         mcp_info = cl.user_session.get("mcp_info", "")
-        await cl.Message(
-            content=f"Reconnected. {mcp_info}",
-            author="System",
-        ).send()
+        await cl.Message(content=f"Reconnected. {mcp_info}", author="System").send()
         return True
-    else:
-        await cl.Message(
-            content="Reconnection failed. Check that MCP servers are running.",
-            author="System",
-        ).send()
-        return False
+    await cl.Message(content="Reconnection failed. Check that MCP servers are running.", author="System").send()
+    return False
 
 
 # ── Message handler ────────────────────────────────────────────────────────
