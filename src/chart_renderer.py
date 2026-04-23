@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 UI_URI_PATTERN = re.compile(r"ui://[^\s\"']+")
 
 
+
 @dataclass
 class PlotlyChart(Element):
     """Lightweight Plotly element — sends raw JSON to the Chainlit frontend

@@ -750,6 +750,42 @@ async def on_message(message: cl.Message, *, _retried: bool = False):
                 await on_message(message, _retried=True)
                 return
 
+        # ── Chart rendering (before response) ──────────────────
+        if result_messages and not needs_reconnect:
+            current_agent = cl.user_session.get("agent") or agent
+            mcp_servers = [s for s in current_agent.toolsets if hasattr(s, "read_resource")]
+            logger.info(
+                "Chart scan: %d messages, %d MCP servers with read_resource",
+                len(result_messages), len(mcp_servers),
+            )
+            for msg in result_messages:
+                for part in getattr(msg, "parts", []):
+                    if type(part).__name__ == "ToolReturnPart":
+                        raw = getattr(part, "content", "")
+                        content, _ = _split_tool_content(raw)
+                        logger.info(
+                            "ToolReturnPart [%s] (%d chars): %.200s",
+                            getattr(part, "tool_name", "?"),
+                            len(content),
+                            content[:200],
+                        )
+                        if UI_URI_PATTERN.search(content):
+                            for server in mcp_servers:
+                                chart_el = await render_chart_if_present(content, server)
+                                if chart_el:
+                                    chart_elements.append(chart_el)
+                                    break
+                            else:
+                                # All servers failed — likely stale session
+                                if not _retried:
+                                    logger.warning("Chart rendering failed on all servers — reconnecting and retrying")
+                                    if await _reconnect_mcp():
+                                        await on_message(message, _retried=True)
+                                        return
+
+        if not chart_elements and fallback_images:
+            chart_elements = fallback_images
+
         # Send the response message AFTER all steps so it appears below them
         response_msg.content = "".join(text_parts)
 
@@ -775,43 +811,6 @@ async def on_message(message: cl.Message, *, _retried: bool = False):
         # Save message history for next turn
         if result_messages is not None:
             cl.user_session.set("pydantic_history", result_messages)
-
-        # ── Chart rendering ─────────────────────────────────────
-        chart_had_uri = False
-        if result_messages:
-            current_agent = cl.user_session.get("agent") or agent
-            mcp_servers = [s for s in current_agent.toolsets if hasattr(s, "read_resource")]
-            logger.info(
-                "Chart scan: %d messages, %d MCP servers with read_resource",
-                len(result_messages), len(mcp_servers),
-            )
-            for msg in result_messages:
-                for part in getattr(msg, "parts", []):
-                    if type(part).__name__ == "ToolReturnPart":
-                        raw = getattr(part, "content", "")
-                        content, _ = _split_tool_content(raw)
-                        logger.info(
-                            "ToolReturnPart [%s] (%d chars): %.200s",
-                            getattr(part, "tool_name", "?"),
-                            len(content),
-                            content[:200],
-                        )
-                        if UI_URI_PATTERN.search(content):
-                            chart_had_uri = True
-                        for server in mcp_servers:
-                            chart_el = await render_chart_if_present(content, server)
-                            if chart_el:
-                                chart_elements.append(chart_el)
-                                break
-
-        # If chart URIs were found but interactive rendering failed on all
-        # servers, a session may be stale — reconnect for future requests.
-        if chart_had_uri and not chart_elements and not needs_reconnect:
-            logger.warning("Chart URI found but rendering failed — reconnecting stale MCP sessions")
-            await _reconnect_mcp()
-
-        if not chart_elements and fallback_images:
-            chart_elements = fallback_images
 
         if chart_elements:
             logger.info("Sending %d chart elements", len(chart_elements))
