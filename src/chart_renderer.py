@@ -121,6 +121,17 @@ async def render_chart_if_present(
         content_str = str(resource_content) if not isinstance(resource_content, str) else resource_content
         fig_json = _extract_plotly_json(content_str)
         if fig_json:
+            fig = json.loads(fig_json)
+            layout = fig.setdefault("layout", {})
+            layout.setdefault("autosize", True)
+            layout.setdefault("width", 900)
+            layout.setdefault("height", 550)
+            margin = layout.setdefault("margin", {})
+            margin.setdefault("t", 40)
+            legend = layout.setdefault("legend", {})
+            legend.setdefault("y", 0.95)
+            legend.setdefault("yanchor", "top")
+            fig_json = json.dumps(fig)
             logger.info("Plotly JSON extracted (%d chars)", len(fig_json))
             return PlotlyChart(name="chart", content=fig_json, display="inline")
         else:

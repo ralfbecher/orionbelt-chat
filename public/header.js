@@ -237,6 +237,21 @@
   document.head.appendChild(script);
 })();
 
+// Resize Plotly chart containers — override Chainlit inline styles
+(function plotlyResize() {
+  function resize() {
+    document.querySelectorAll(".js-plotly-plot").forEach(function (plot) {
+      var container = plot.closest("[style]");
+      if (container) {
+        container.style.maxWidth = "100%";
+        container.style.height = "auto";
+      }
+    });
+  }
+  new MutationObserver(resize)
+    .observe(document.body, { childList: true, subtree: true });
+})();
+
 // Arrow Up in empty input → recall last user message (shell-style history)
 (function arrowUpRecall() {
   var messageHistory = [];
