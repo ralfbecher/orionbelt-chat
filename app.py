@@ -9,6 +9,7 @@ from chainlit.context import local_steps
 from chainlit.input_widget import Select, TextInput
 from pydantic_ai import Agent
 from pydantic_ai.messages import (
+    BinaryContent,
     FunctionToolCallEvent,
     FunctionToolResultEvent,
     PartDeltaEvent,
@@ -32,6 +33,42 @@ logger = logging.getLogger(__name__)
 # overwhelm the WebSocket/browser and stall the agent loop.  The model
 # still receives the full content via pydantic-ai's internal history.
 STEP_OUTPUT_LIMIT = 10_000
+
+
+def _split_tool_content(raw) -> tuple[str, list[BinaryContent]]:
+    """Split tool return content into a text string and binary parts.
+
+    Pydantic AI tool results may contain BinaryContent (e.g. BinaryImage)
+    mixed with strings inside a list.  Returns the text portion (JSON-
+    serialised for dicts/lists, str() otherwise) and any binary objects.
+    """
+    binaries: list[BinaryContent] = []
+    if isinstance(raw, BinaryContent):
+        return "", [raw]
+    if isinstance(raw, list):
+        text_parts = []
+        for item in raw:
+            if isinstance(item, BinaryContent):
+                binaries.append(item)
+            else:
+                text_parts.append(item)
+        if text_parts:
+            if any(isinstance(p, (dict, list)) for p in text_parts):
+                try:
+                    text = json.dumps(text_parts)
+                except TypeError:
+                    text = "\n".join(str(p) for p in text_parts)
+            else:
+                text = "\n".join(str(p) for p in text_parts)
+        else:
+            text = ""
+        return text, binaries
+    if isinstance(raw, dict):
+        try:
+            return json.dumps(raw), binaries
+        except TypeError:
+            return str(raw), binaries
+    return str(raw), binaries
 
 
 # ── Chainlit Chat Settings (sidebar UI) ───────────────────────────────────
@@ -429,6 +466,7 @@ async def on_message(message: cl.Message):
     _run_step_id = _parent_steps[-1].id if _parent_steps else None
 
     chart_elements: list = []
+    fallback_images: list = []
     response_msg = cl.Message(content="")
     response_sent = False
     tool_steps: dict[str, cl.Step] = {}  # tool_call_id → Step
@@ -532,7 +570,8 @@ async def on_message(message: cl.Message):
                                     tool_steps[call_id] = step
 
                                 elif isinstance(event, FunctionToolResultEvent):
-                                    result_content = str(event.result.content)
+                                    result_text, result_binaries = _split_tool_content(event.result.content)
+                                    result_content = result_text or str(event.result.content)
                                     call_id = event.result.tool_call_id
                                     logger.info(
                                         "Tool result [%s] (%d chars): %s → %s",
@@ -544,14 +583,24 @@ async def on_message(message: cl.Message):
 
                                     step = tool_steps.pop(call_id, None)
                                     if step:
-                                        if len(result_content) > STEP_OUTPUT_LIMIT:
+                                        display_text = result_text or ("(image)" if result_binaries else "")
+                                        if len(display_text) > STEP_OUTPUT_LIMIT:
                                             step.output = (
-                                                result_content[:STEP_OUTPUT_LIMIT]
-                                                + f"\n\n… (truncated — {len(result_content):,} chars total)"
+                                                display_text[:STEP_OUTPUT_LIMIT]
+                                                + f"\n\n… (truncated — {len(display_text):,} chars total)"
                                             )
                                         else:
-                                            step.output = result_content
+                                            step.output = display_text
                                         await step.update()
+
+                                    for binary in result_binaries:
+                                        if binary.is_image:
+                                            fallback_images.append(cl.Image(
+                                                name="chart",
+                                                content=binary.data,
+                                                display="inline",
+                                                mime=binary.media_type,
+                                            ))
                     except Exception as tool_err:
                         # pydantic-ai's ModelRetry / max-retries-exceeded can
                         # leak through node.stream() instead of being handled
@@ -623,8 +672,7 @@ async def on_message(message: cl.Message):
                 for part in getattr(msg, "parts", []):
                     if type(part).__name__ == "ToolReturnPart":
                         raw = getattr(part, "content", "")
-                        # content may be str, dict, or list — flatten to string for URI detection
-                        content = json.dumps(raw) if isinstance(raw, dict | list) else str(raw)
+                        content, _ = _split_tool_content(raw)
                         logger.info(
                             "ToolReturnPart [%s] (%d chars): %.200s",
                             getattr(part, "tool_name", "?"),
@@ -637,6 +685,8 @@ async def on_message(message: cl.Message):
                                 chart_elements.append(chart_el)
                                 break
 
+        if not chart_elements and fallback_images:
+            chart_elements = fallback_images
         if chart_elements:
             logger.info("Sending %d chart elements", len(chart_elements))
             await cl.Message(
