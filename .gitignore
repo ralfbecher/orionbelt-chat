@@ -76,3 +76,6 @@ temp/
 
 # Design documents (not part of the package)
 design/
+
+# Claude Code
+.claude/
