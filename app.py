@@ -4,6 +4,7 @@ import asyncio
 import copy
 import json
 import logging
+from importlib.metadata import PackageNotFoundError, version as _pkg_version
 
 import chainlit as cl
 from chainlit.context import local_steps
@@ -28,6 +29,12 @@ from src.providers import PROVIDER_LABELS, default_model_for, models_for
 from src.settings import settings
 
 logger = logging.getLogger(__name__)
+
+try:
+    _APP_VERSION = _pkg_version("orionbelt-chat")
+except PackageNotFoundError:
+    _APP_VERSION = "unknown"
+logger.info("OrionBelt Chat v%s starting up", _APP_VERSION)
 
 # Maximum characters to display in a Chainlit tool-call step output.
 # Large MCP tool responses (e.g. SQL query results with many rows) can
