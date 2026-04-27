@@ -10,6 +10,7 @@ import chainlit as cl
 from chainlit.context import local_steps
 from chainlit.input_widget import Select, TextInput
 from pydantic_ai import Agent
+from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.messages import (
     BinaryContent,
     FunctionToolCallEvent,
@@ -422,6 +423,36 @@ _MCP_ERROR_TYPES = (
 )
 
 
+_MODEL_HTTP_HINTS = {
+    401: "Authentication failed — check the API key for this provider.",
+    402: "Out of credits or quota exceeded for this provider.",
+    403: "Access denied — the API key may not be allowed to use this model.",
+    404: "Model not found — verify the selected model is still available.",
+    408: "Provider timed out — try again or pick a different model.",
+    413: "Request too large — shorten the message or trim history.",
+    429: "Rate limit hit — wait a moment and try again.",
+}
+
+
+def _format_model_http_error(err: ModelHTTPError) -> str:
+    body = err.body
+    detail = ""
+    if isinstance(body, dict):
+        inner = body.get("error") if isinstance(body.get("error"), dict) else body
+        detail = str(inner.get("message", "")).strip() if isinstance(inner, dict) else ""
+    elif isinstance(body, str):
+        detail = body.strip()
+
+    hint = _MODEL_HTTP_HINTS.get(err.status_code)
+    if not hint:
+        hint = "Provider error." if err.status_code >= 500 else f"Provider returned HTTP {err.status_code}."
+
+    parts = [f"**{hint}**", f"Model: `{err.model_name}`"]
+    if detail:
+        parts.append(detail)
+    return "\n\n".join(parts)
+
+
 def _is_mcp_session_error(exc: BaseException) -> bool:
     """Walk the exception chain looking for MCP / connection-loss signals."""
     cur: BaseException | None = exc
@@ -529,6 +560,17 @@ async def _full_reconnect_mcp() -> bool:
 
 
 # ── Message handler ────────────────────────────────────────────────────────
+
+
+@cl.action_callback("retry_message")
+async def on_retry(action: cl.Action):
+    """Resubmit the last user message after a model/provider error."""
+    await action.remove()
+    content = cl.user_session.get("retry_content")
+    if not content:
+        await cl.Message(content="Nothing to retry.", author="System").send()
+        return
+    await on_message(cl.Message(content=content, author="User"))
 
 
 @cl.on_message
@@ -840,19 +882,39 @@ async def on_message(message: cl.Message, *, _retried: bool = False):
     except BaseException as e:
         # BaseException catches asyncio.CancelledError (Python 3.9+)
         # which Chainlit may raise on WebSocket disconnect / timeout.
-        logger.exception("Error in message handler")
         if isinstance(e, KeyboardInterrupt | SystemExit):
             raise
 
+        # Unwrap to find a ModelHTTPError anywhere in the cause chain
+        model_err: ModelHTTPError | None = None
+        cur: BaseException | None = e
+        while cur is not None:
+            if isinstance(cur, ModelHTTPError):
+                model_err = cur
+                break
+            cur = cur.__cause__ if cur.__cause__ is not cur else None
+
+        if model_err is not None:
+            # Expected provider failure (402, 429, etc.) — one-line log, no traceback.
+            logger.warning(
+                "Model HTTP %d on %s: %s",
+                model_err.status_code, model_err.model_name, model_err.body,
+            )
+        else:
+            logger.exception("Error in message handler")
+
         try:
-            if _is_mcp_session_error(e):
+            if model_err is None and _is_mcp_session_error(e):
                 if await _reconnect_mcp() and not _retried:
                     await on_message(message, _retried=True)
                     return
             else:
+                content = _format_model_http_error(model_err) if model_err else f"Error: {e}"
+                cl.user_session.set("retry_content", message.content)
                 await cl.Message(
-                    content=f"Error: {e}",
+                    content=content,
                     author="System",
+                    actions=[cl.Action(name="retry_message", payload={}, label="Retry")],
                 ).send()
         except Exception:
             pass  # UI may already be gone
