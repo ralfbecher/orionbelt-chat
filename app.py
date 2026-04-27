@@ -4,11 +4,13 @@ import asyncio
 import copy
 import json
 import logging
+from importlib.metadata import PackageNotFoundError, version as _pkg_version
 
 import chainlit as cl
 from chainlit.context import local_steps
 from chainlit.input_widget import Select, TextInput
 from pydantic_ai import Agent
+from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.messages import (
     BinaryContent,
     FunctionToolCallEvent,
@@ -28,6 +30,12 @@ from src.providers import PROVIDER_LABELS, default_model_for, models_for
 from src.settings import settings
 
 logger = logging.getLogger(__name__)
+
+try:
+    _APP_VERSION = _pkg_version("orionbelt-chat")
+except PackageNotFoundError:
+    _APP_VERSION = "unknown"
+logger.info("OrionBelt Chat v%s starting up", _APP_VERSION)
 
 # Maximum characters to display in a Chainlit tool-call step output.
 # Large MCP tool responses (e.g. SQL query results with many rows) can
@@ -415,6 +423,64 @@ _MCP_ERROR_TYPES = (
 )
 
 
+_MODEL_HTTP_HINTS = {
+    401: "Authentication failed — check the API key for this provider.",
+    402: "Out of credits or quota exceeded for this provider.",
+    403: "Access denied — the API key may not be allowed to use this model.",
+    404: "Model not found — verify the selected model is still available.",
+    408: "Provider timed out — try again or pick a different model.",
+    413: "Request too large — shorten the message or trim history.",
+    429: "Rate limit hit — wait a moment and try again.",
+}
+
+
+def _extract_body_message(body) -> str:
+    """Pull the human-readable message out of an OpenAI / provider error body."""
+    if isinstance(body, dict):
+        inner = body.get("error") if isinstance(body.get("error"), dict) else body
+        if isinstance(inner, dict):
+            msg = inner.get("message")
+            if msg:
+                return str(msg).strip()
+    if isinstance(body, str):
+        return body.strip()
+    return ""
+
+
+def _hint_for_status(status: int | None) -> str:
+    if status is None:
+        return "Provider returned an error."
+    if status in _MODEL_HTTP_HINTS:
+        return _MODEL_HTTP_HINTS[status]
+    return "Provider error." if status >= 500 else f"Provider returned HTTP {status}."
+
+
+def _format_model_http_error(err: ModelHTTPError) -> str:
+    detail = _extract_body_message(err.body)
+    parts = [f"**{_hint_for_status(err.status_code)}**", f"Model: `{err.model_name}`"]
+    if detail:
+        parts.append(detail)
+    return "\n\n".join(parts)
+
+
+def _format_provider_error(exc: BaseException) -> str | None:
+    """Walk the cause chain for a model/provider error; format if found."""
+    cur: BaseException | None = exc
+    while cur is not None:
+        if isinstance(cur, ModelHTTPError):
+            return _format_model_http_error(cur)
+        body = getattr(cur, "body", None)
+        if body is not None:
+            detail = _extract_body_message(body) or str(cur).strip()
+            status = getattr(cur, "status_code", None)
+            parts = [f"**{_hint_for_status(status)}**"]
+            if detail:
+                parts.append(detail)
+            return "\n\n".join(parts)
+        cur = cur.__cause__ if cur.__cause__ is not cur else None
+    return None
+
+
 def _is_mcp_session_error(exc: BaseException) -> bool:
     """Walk the exception chain looking for MCP / connection-loss signals."""
     cur: BaseException | None = exc
@@ -522,6 +588,17 @@ async def _full_reconnect_mcp() -> bool:
 
 
 # ── Message handler ────────────────────────────────────────────────────────
+
+
+@cl.action_callback("retry_message")
+async def on_retry(action: cl.Action):
+    """Resubmit the last user message after a model/provider error."""
+    await action.remove()
+    content = cl.user_session.get("retry_content")
+    if not content:
+        await cl.Message(content="Nothing to retry.", author="System").send()
+        return
+    await on_message(cl.Message(content=content, author="User"))
 
 
 @cl.on_message
@@ -833,19 +910,29 @@ async def on_message(message: cl.Message, *, _retried: bool = False):
     except BaseException as e:
         # BaseException catches asyncio.CancelledError (Python 3.9+)
         # which Chainlit may raise on WebSocket disconnect / timeout.
-        logger.exception("Error in message handler")
         if isinstance(e, KeyboardInterrupt | SystemExit):
             raise
 
+        provider_msg = _format_provider_error(e)
+
+        if provider_msg is not None:
+            # Expected provider failure (402, 429, stream-level error) — short log, no traceback.
+            logger.warning("Provider error: %s", str(e).strip() or type(e).__name__)
+        else:
+            logger.exception("Error in message handler")
+
         try:
-            if _is_mcp_session_error(e):
+            if provider_msg is None and _is_mcp_session_error(e):
                 if await _reconnect_mcp() and not _retried:
                     await on_message(message, _retried=True)
                     return
             else:
+                content = provider_msg if provider_msg else f"Error: {e}"
+                cl.user_session.set("retry_content", message.content)
                 await cl.Message(
-                    content=f"Error: {e}",
+                    content=content,
                     author="System",
+                    actions=[cl.Action(name="retry_message", payload={}, label="Retry")],
                 ).send()
         except Exception:
             pass  # UI may already be gone

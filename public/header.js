@@ -1,6 +1,33 @@
+// Replace Chainlit's default favicon with the OrionBelt mark
+(function setFavicon() {
+  var HREF = "/public/favicon.png";
+  function apply() {
+    document.querySelectorAll("link[rel~='icon']").forEach(function (l) { l.remove(); });
+    var link = document.createElement("link");
+    link.rel = "icon";
+    link.type = "image/png";
+    link.href = HREF;
+    document.head.appendChild(link);
+  }
+  apply();
+  // Chainlit may re-inject its own <link> after hydration, so re-apply if it does
+  new MutationObserver(function (muts) {
+    for (var i = 0; i < muts.length; i++) {
+      var added = muts[i].addedNodes;
+      for (var j = 0; j < added.length; j++) {
+        var n = added[j];
+        if (n.tagName === "LINK" && /icon/i.test(n.rel || "") && n.href.indexOf(HREF) === -1) {
+          apply();
+          return;
+        }
+      }
+    }
+  }).observe(document.head, { childList: true });
+})();
+
 // Inject OrionBelt logo, app name, and version badge into the Chainlit header
 (function injectHeader() {
-  var VERSION = "v1.1.2";
+  var VERSION = "v1.1.3";
   var LOGO_DARK = "/public/logo_w.png";
   var LOGO_LIGHT = "/public/logo.png";
   var APP_NAME = "Chat";
