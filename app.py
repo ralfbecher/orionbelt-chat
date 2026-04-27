@@ -434,23 +434,51 @@ _MODEL_HTTP_HINTS = {
 }
 
 
-def _format_model_http_error(err: ModelHTTPError) -> str:
-    body = err.body
-    detail = ""
+def _extract_body_message(body) -> str:
+    """Pull the human-readable message out of an OpenAI / provider error body."""
     if isinstance(body, dict):
         inner = body.get("error") if isinstance(body.get("error"), dict) else body
-        detail = str(inner.get("message", "")).strip() if isinstance(inner, dict) else ""
-    elif isinstance(body, str):
-        detail = body.strip()
+        if isinstance(inner, dict):
+            msg = inner.get("message")
+            if msg:
+                return str(msg).strip()
+    if isinstance(body, str):
+        return body.strip()
+    return ""
 
-    hint = _MODEL_HTTP_HINTS.get(err.status_code)
-    if not hint:
-        hint = "Provider error." if err.status_code >= 500 else f"Provider returned HTTP {err.status_code}."
 
-    parts = [f"**{hint}**", f"Model: `{err.model_name}`"]
+def _hint_for_status(status: int | None) -> str:
+    if status is None:
+        return "Provider returned an error."
+    if status in _MODEL_HTTP_HINTS:
+        return _MODEL_HTTP_HINTS[status]
+    return "Provider error." if status >= 500 else f"Provider returned HTTP {status}."
+
+
+def _format_model_http_error(err: ModelHTTPError) -> str:
+    detail = _extract_body_message(err.body)
+    parts = [f"**{_hint_for_status(err.status_code)}**", f"Model: `{err.model_name}`"]
     if detail:
         parts.append(detail)
     return "\n\n".join(parts)
+
+
+def _format_provider_error(exc: BaseException) -> str | None:
+    """Walk the cause chain for a model/provider error; format if found."""
+    cur: BaseException | None = exc
+    while cur is not None:
+        if isinstance(cur, ModelHTTPError):
+            return _format_model_http_error(cur)
+        body = getattr(cur, "body", None)
+        if body is not None:
+            detail = _extract_body_message(body) or str(cur).strip()
+            status = getattr(cur, "status_code", None)
+            parts = [f"**{_hint_for_status(status)}**"]
+            if detail:
+                parts.append(detail)
+            return "\n\n".join(parts)
+        cur = cur.__cause__ if cur.__cause__ is not cur else None
+    return None
 
 
 def _is_mcp_session_error(exc: BaseException) -> bool:
@@ -885,31 +913,21 @@ async def on_message(message: cl.Message, *, _retried: bool = False):
         if isinstance(e, KeyboardInterrupt | SystemExit):
             raise
 
-        # Unwrap to find a ModelHTTPError anywhere in the cause chain
-        model_err: ModelHTTPError | None = None
-        cur: BaseException | None = e
-        while cur is not None:
-            if isinstance(cur, ModelHTTPError):
-                model_err = cur
-                break
-            cur = cur.__cause__ if cur.__cause__ is not cur else None
+        provider_msg = _format_provider_error(e)
 
-        if model_err is not None:
-            # Expected provider failure (402, 429, etc.) — one-line log, no traceback.
-            logger.warning(
-                "Model HTTP %d on %s: %s",
-                model_err.status_code, model_err.model_name, model_err.body,
-            )
+        if provider_msg is not None:
+            # Expected provider failure (402, 429, stream-level error) — short log, no traceback.
+            logger.warning("Provider error: %s", str(e).strip() or type(e).__name__)
         else:
             logger.exception("Error in message handler")
 
         try:
-            if model_err is None and _is_mcp_session_error(e):
+            if provider_msg is None and _is_mcp_session_error(e):
                 if await _reconnect_mcp() and not _retried:
                     await on_message(message, _retried=True)
                     return
             else:
-                content = _format_model_http_error(model_err) if model_err else f"Error: {e}"
+                content = provider_msg if provider_msg else f"Error: {e}"
                 cl.user_session.set("retry_content", message.content)
                 await cl.Message(
                     content=content,
