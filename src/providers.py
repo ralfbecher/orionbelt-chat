@@ -1,11 +1,19 @@
 """LLM provider resolution for Pydantic AI."""
 
+from openai import AsyncOpenAI
 from pydantic_ai.models.anthropic import AnthropicModel
 from pydantic_ai.models.openai import OpenAIModel
 from pydantic_ai.providers.anthropic import AnthropicProvider
 from pydantic_ai.providers.openai import OpenAIProvider
 
 from .settings import settings
+
+# OpenRouter app attribution headers (https://openrouter.ai/docs/app-attribution).
+# Other OpenAI-compatible providers ignore unknown headers.
+_OPENROUTER_HEADERS = {
+    "HTTP-Referer": "https://github.com/ralfbecher/orionbelt-chat",
+    "X-Title": "OrionBelt Chat",
+}
 
 
 # Human-readable labels shown in the UI dropdown
@@ -87,8 +95,11 @@ def resolve_model(provider: str, model: str):
             return OpenAIModel(
                 model,
                 provider=OpenAIProvider(
-                    base_url="https://openrouter.ai/api/v1",
-                    api_key=settings.openrouter_api_key,
+                    openai_client=AsyncOpenAI(
+                        base_url="https://openrouter.ai/api/v1",
+                        api_key=settings.openrouter_api_key,
+                        default_headers=_OPENROUTER_HEADERS,
+                    ),
                 ),
             )
 
