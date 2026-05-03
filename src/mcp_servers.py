@@ -32,6 +32,14 @@ def _resolve_sampling_model():
     return model
 
 
+def get_sampling_model_label() -> str | None:
+    """Return a human-readable label for the sampling model, or None if disabled."""
+    if _resolve_sampling_model() is None:
+        return None
+    provider = settings.default_provider
+    return f"{provider}/{default_model_for(provider)}"
+
+
 def _make_server(
     endpoint: str, module: str, sampling_model
 ) -> MCPServerStreamableHTTP | MCPServerStdio:

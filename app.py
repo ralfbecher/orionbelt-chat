@@ -24,7 +24,7 @@ from pydantic_ai.messages import (
 from src.agent import make_agent
 from src.chart_renderer import UI_URI_PATTERN, render_chart_if_present
 from src.file_downloads import extract_downloads_from_response, extract_downloads_from_tool_results
-from src.mcp_servers import get_mcp_servers_named
+from src.mcp_servers import get_mcp_servers_named, get_sampling_model_label
 from src.mermaid_renderer import extract_mermaid_from_tool_results
 from src.providers import PROVIDER_LABELS, default_model_for, models_for
 from src.settings import settings
@@ -213,6 +213,13 @@ def _update_mcp_info(connected_names: list[str], failed_names: list[tuple[str, E
         parts.append(f"Failed to connect:\n{fail_list}")
     if not connected_names and not failed_names:
         parts.append("No MCP servers configured.")
+
+    sampling_label = get_sampling_model_label()
+    if sampling_label:
+        parts.append(f"Sampling: `{sampling_label}`")
+    else:
+        parts.append("Sampling: _disabled_")
+
     cl.user_session.set("mcp_info", "\n\n".join(parts))
 
 
