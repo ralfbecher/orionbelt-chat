@@ -173,21 +173,30 @@ def _wrap_sampling_for_chainlit(server, server_name: str) -> None:
         if len(question) > STEP_OUTPUT_LIMIT:
             question = question[:STEP_OUTPUT_LIMIT] + f"\n\n… (truncated — {len(question):,} chars)"
 
-        step = cl.Step(name=f"Sampling: {server_name}", type="tool")
-        step.input = question
+        parent_id = cl.user_session.get("run_step_id")
+        step = cl.Step(name=f"Sampling: {server_name}", type="tool", parent_id=parent_id)
         await step.send()
         try:
             result = await original(context, params)
             content = getattr(result, "content", None)
             text = getattr(content, "text", None) if content is not None else None
-            output = text or str(result)
-            if len(output) > STEP_OUTPUT_LIMIT:
-                output = output[:STEP_OUTPUT_LIMIT] + f"\n\n… (truncated — {len(output):,} chars)"
-            step.output = output
+            answer = text or str(result)
+            if len(answer) > STEP_OUTPUT_LIMIT:
+                answer = answer[:STEP_OUTPUT_LIMIT] + f"\n\n… (truncated — {len(answer):,} chars)"
+            # Render as markdown (wraps naturally) instead of step.input (code block)
+            step.output = (
+                f"**Prompt sent to model:**\n\n{question}\n\n"
+                f"---\n\n"
+                f"**Model response:**\n\n{answer}"
+            )
             await step.update()
             return result
         except Exception as e:
-            step.output = f"Error: {e}"
+            step.output = (
+                f"**Prompt sent to model:**\n\n{question}\n\n"
+                f"---\n\n"
+                f"**Error:** {e}"
+            )
             await step.update()
             raise
 
@@ -683,6 +692,10 @@ async def on_message(message: cl.Message, *, _retried: bool = False):
     # in chronological order (Steps first, response text last).
     _parent_steps = local_steps.get() or []
     _run_step_id = _parent_steps[-1].id if _parent_steps else None
+    # Stash for the sampling-callback wrapper so its Step lives under the
+    # same run timeline as the tool steps (rather than as a root-level Step
+    # at the bottom of the chat).
+    cl.user_session.set("run_step_id", _run_step_id)
 
     chart_elements: list = []
     fallback_images: list = []
