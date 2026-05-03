@@ -43,14 +43,18 @@ def get_sampling_model_label() -> str | None:
 def _make_server(
     endpoint: str, module: str, sampling_model
 ) -> MCPServerStreamableHTTP | MCPServerStdio:
+    request_timeout = settings.mcp_request_timeout_seconds
     if _is_url(endpoint):
         return MCPServerStreamableHTTP(
-            url=endpoint, timeout=60, max_retries=3, sampling_model=sampling_model
+            url=endpoint,
+            timeout=request_timeout,
+            max_retries=3,
+            sampling_model=sampling_model,
         )
     return MCPServerStdio(
         "uv",
         args=["run", "--directory", endpoint, "python", "-m", module],
-        timeout=60,
+        timeout=request_timeout,
         max_retries=3,
         sampling_model=sampling_model,
     )

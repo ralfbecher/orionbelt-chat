@@ -42,7 +42,7 @@ logger.info("OrionBelt Chat v%s starting up", _APP_VERSION)
 # overwhelm the WebSocket/browser and stall the agent loop.  The model
 # still receives the full content via pydantic-ai's internal history.
 STEP_OUTPUT_LIMIT = 10_000
-TOOL_CALL_TIMEOUT = 120  # seconds
+TOOL_CALL_TIMEOUT = settings.tool_call_timeout_seconds
 
 
 def _split_tool_content(raw) -> tuple[str, list[BinaryContent]]:
