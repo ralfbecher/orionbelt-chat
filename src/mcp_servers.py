@@ -61,6 +61,10 @@ _SERVER_DEFS: list[tuple[str, str, str]] = [
     ("OrionBelt Semantic Layer", "semantic_layer_server_dir", "orionbelt_semantic_layer"),
 ]
 
+# Servers known to issue MCP sampling/createMessage calls. The MCP protocol
+# does not advertise this from the server side, so list known cases here.
+SERVERS_USING_SAMPLING: frozenset[str] = frozenset({"OrionBelt Analytics"})
+
 
 def get_mcp_servers_named() -> list[tuple[str, MCPServerStreamableHTTP | MCPServerStdio]]:
     """Return (display_name, server) pairs for configured MCP servers."""
