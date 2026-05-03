@@ -24,7 +24,7 @@ from pydantic_ai.messages import (
 from src.agent import make_agent
 from src.chart_renderer import UI_URI_PATTERN, render_chart_if_present
 from src.file_downloads import extract_downloads_from_response, extract_downloads_from_tool_results
-from src.mcp_servers import get_mcp_servers_named
+from src.mcp_servers import SERVERS_USING_SAMPLING, get_mcp_servers_named, get_sampling_model_label
 from src.mermaid_renderer import extract_mermaid_from_tool_results
 from src.providers import PROVIDER_LABELS, default_model_for, models_for
 from src.settings import settings
@@ -42,7 +42,7 @@ logger.info("OrionBelt Chat v%s starting up", _APP_VERSION)
 # overwhelm the WebSocket/browser and stall the agent loop.  The model
 # still receives the full content via pydantic-ai's internal history.
 STEP_OUTPUT_LIMIT = 10_000
-TOOL_CALL_TIMEOUT = 120  # seconds
+TOOL_CALL_TIMEOUT = settings.tool_call_timeout_seconds
 
 
 def _split_tool_content(raw) -> tuple[str, list[BinaryContent]]:
@@ -150,6 +150,64 @@ async def on_start():
         cl.user_session.set("status_msg", status_msg)
 
 
+def _wrap_sampling_for_chainlit(server, server_name: str) -> None:
+    """Wrap the MCP server's sampling callback to render a Chainlit Step.
+
+    Must be called BEFORE ``server.__aenter__()`` so the underlying
+    ClientSession captures the wrapped callback (the original is bound
+    by reference inside the session constructor).
+    """
+    original = server._sampling_callback
+
+    async def wrapped(context, params):
+        try:
+            lines = []
+            for m in getattr(params, "messages", []) or []:
+                role = getattr(m, "role", "?")
+                content = getattr(m, "content", m)
+                text = getattr(content, "text", None)
+                lines.append(f"**[{role}]** {text or content}")
+            question = "\n\n".join(lines)
+        except Exception:
+            question = str(params)
+        if len(question) > STEP_OUTPUT_LIMIT:
+            question = question[:STEP_OUTPUT_LIMIT] + f"\n\n… (truncated — {len(question):,} chars)"
+
+        # Prefer the in-flight tool step (sampling is fired from inside the
+        # tool's execution); fall back to the run step if no tool is active.
+        parent_id = (
+            cl.user_session.get("active_tool_step_id")
+            or cl.user_session.get("run_step_id")
+        )
+        step = cl.Step(name=f"Sampling: {server_name}", type="tool", parent_id=parent_id)
+        await step.send()
+        try:
+            result = await original(context, params)
+            content = getattr(result, "content", None)
+            text = getattr(content, "text", None) if content is not None else None
+            answer = text or str(result)
+            if len(answer) > STEP_OUTPUT_LIMIT:
+                answer = answer[:STEP_OUTPUT_LIMIT] + f"\n\n… (truncated — {len(answer):,} chars)"
+            # Render as markdown (wraps naturally) instead of step.input (code block)
+            step.output = (
+                f"**Prompt sent to model:**\n\n{question}\n\n"
+                f"---\n\n"
+                f"**Model response:**\n\n{answer}"
+            )
+            await step.update()
+            return result
+        except Exception as e:
+            step.output = (
+                f"**Prompt sent to model:**\n\n{question}\n\n"
+                f"---\n\n"
+                f"**Error:** {e}"
+            )
+            await step.update()
+            raise
+
+    server._sampling_callback = wrapped
+
+
 async def _init_agent(provider: str, model: str) -> bool:
     """
     Connect MCP servers individually, create agent with the successful ones.
@@ -174,6 +232,7 @@ async def _init_agent(provider: str, model: str) -> bool:
 
     # Connect each MCP server individually
     for name, server in named_servers:
+        _wrap_sampling_for_chainlit(server, name)
         try:
             await server.__aenter__()
             connected.append(server)
@@ -206,13 +265,23 @@ def _update_mcp_info(connected_names: list[str], failed_names: list[tuple[str, E
     """Update the mcp_info session variable."""
     parts = []
     if connected_names:
-        server_list = "\n".join(f"- `{n}`" for n in connected_names)
+        server_list = "\n".join(
+            f"- `{n}`" + (" — uses sampling" if n in SERVERS_USING_SAMPLING else "")
+            for n in connected_names
+        )
         parts.append(f"Connected MCP servers:\n{server_list}")
     if failed_names:
         fail_list = "\n".join(f"- `{n}`: {e}" for n, e in failed_names)
         parts.append(f"Failed to connect:\n{fail_list}")
     if not connected_names and not failed_names:
         parts.append("No MCP servers configured.")
+
+    sampling_label = get_sampling_model_label()
+    if sampling_label:
+        parts.append(f"Sampling Model: `{sampling_label}`")
+    else:
+        parts.append("Sampling Model: _disabled_")
+
     cl.user_session.set("mcp_info", "\n\n".join(parts))
 
 
@@ -628,6 +697,10 @@ async def on_message(message: cl.Message, *, _retried: bool = False):
     # in chronological order (Steps first, response text last).
     _parent_steps = local_steps.get() or []
     _run_step_id = _parent_steps[-1].id if _parent_steps else None
+    # Stash for the sampling-callback wrapper so its Step lives under the
+    # same run timeline as the tool steps (rather than as a root-level Step
+    # at the bottom of the chat).
+    cl.user_session.set("run_step_id", _run_step_id)
 
     chart_elements: list = []
     fallback_images: list = []
@@ -733,6 +806,10 @@ async def on_message(message: cl.Message, *, _retried: bool = False):
                                     )
                                     await step.send()
                                     tool_steps[call_id] = step
+                                    # Sampling that fires while this tool is in flight should
+                                    # nest under it (the server triggers sampling from inside
+                                    # tool execution).
+                                    cl.user_session.set("active_tool_step_id", step.id)
 
                                 elif isinstance(event, FunctionToolResultEvent):
                                     result_text, result_binaries = _split_tool_content(event.result.content)
@@ -760,6 +837,7 @@ async def on_message(message: cl.Message, *, _retried: bool = False):
                                         break
 
                                     step = tool_steps.pop(call_id, None)
+                                    cl.user_session.set("active_tool_step_id", None)
                                     if step:
                                         display_text = result_text or ("(image)" if result_binaries else "")
                                         if len(display_text) > STEP_OUTPUT_LIMIT:

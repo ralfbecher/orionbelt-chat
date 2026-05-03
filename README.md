@@ -7,7 +7,7 @@
 
 <p align="center"><strong>AI-powered chat interface for OrionBelt Analytics & Semantic Layer</strong></p>
 
-[![Version](https://img.shields.io/badge/version-1.1.3-brightgreen.svg)](https://github.com/ralfbecher/orionbelt-chat)
+[![Version](https://img.shields.io/badge/version-1.1.4-brightgreen.svg)](https://github.com/ralfbecher/orionbelt-chat)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![License: BSL 1.1](https://img.shields.io/badge/License-BSL_1.1-orange.svg)](https://github.com/ralfbecher/orionbelt-chat/blob/main/LICENSE)
 [![Chainlit](https://img.shields.io/badge/Chainlit-2.10+-blue)](https://chainlit.io)
@@ -53,6 +53,7 @@ A production-ready chat application that connects to OrionBelt Analytics and Ori
 - **Auto-reconnection** - Detects MCP session loss and reconnects automatically
 - **Tool call resilience** - Retries failed tool calls up to 3 times; preserves conversation context on errors
 - **Flexible transport** - Stdio (local subprocess) or Streamable HTTP (remote) per server
+- **MCP sampling (with tools)** - Servers can delegate LLM calls back to the chat client via `sampling/createMessage`. The client advertises the `sampling.tools` sub-capability so servers can include tool definitions; sampling requests are handled by the env-configured default model (`DEFAULT_PROVIDER` + the matching `*_DEFAULT_MODEL`)
 - **Tool visibility** - Collapsible steps show tool calls with arguments and results
 - **Multi-turn context** - Full conversation history management with Pydantic AI
 
