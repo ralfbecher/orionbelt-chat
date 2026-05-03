@@ -173,7 +173,12 @@ def _wrap_sampling_for_chainlit(server, server_name: str) -> None:
         if len(question) > STEP_OUTPUT_LIMIT:
             question = question[:STEP_OUTPUT_LIMIT] + f"\n\n… (truncated — {len(question):,} chars)"
 
-        parent_id = cl.user_session.get("run_step_id")
+        # Prefer the in-flight tool step (sampling is fired from inside the
+        # tool's execution); fall back to the run step if no tool is active.
+        parent_id = (
+            cl.user_session.get("active_tool_step_id")
+            or cl.user_session.get("run_step_id")
+        )
         step = cl.Step(name=f"Sampling: {server_name}", type="tool", parent_id=parent_id)
         await step.send()
         try:
@@ -801,6 +806,10 @@ async def on_message(message: cl.Message, *, _retried: bool = False):
                                     )
                                     await step.send()
                                     tool_steps[call_id] = step
+                                    # Sampling that fires while this tool is in flight should
+                                    # nest under it (the server triggers sampling from inside
+                                    # tool execution).
+                                    cl.user_session.set("active_tool_step_id", step.id)
 
                                 elif isinstance(event, FunctionToolResultEvent):
                                     result_text, result_binaries = _split_tool_content(event.result.content)
@@ -828,6 +837,7 @@ async def on_message(message: cl.Message, *, _retried: bool = False):
                                         break
 
                                     step = tool_steps.pop(call_id, None)
+                                    cl.user_session.set("active_tool_step_id", None)
                                     if step:
                                         display_text = result_text or ("(image)" if result_binaries else "")
                                         if len(display_text) > STEP_OUTPUT_LIMIT:
