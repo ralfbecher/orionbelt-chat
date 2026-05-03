@@ -17,6 +17,9 @@ def _is_url(value: str) -> bool:
 
 def _resolve_sampling_model():
     """Resolve the env-configured default model used to answer MCP sampling calls."""
+    if not settings.mcp_allow_sampling:
+        logger.info("MCP sampling disabled via MCP_ALLOW_SAMPLING=false")
+        return None
     provider = settings.default_provider
     if not provider:
         return None
@@ -44,11 +47,13 @@ def _make_server(
     endpoint: str, module: str, sampling_model
 ) -> MCPServerStreamableHTTP | MCPServerStdio:
     request_timeout = settings.mcp_request_timeout_seconds
+    allow_sampling = settings.mcp_allow_sampling
     if _is_url(endpoint):
         return MCPServerStreamableHTTP(
             url=endpoint,
             timeout=request_timeout,
             max_retries=3,
+            allow_sampling=allow_sampling,
             sampling_model=sampling_model,
         )
     return MCPServerStdio(
@@ -56,6 +61,7 @@ def _make_server(
         args=["run", "--directory", endpoint, "python", "-m", module],
         timeout=request_timeout,
         max_retries=3,
+        allow_sampling=allow_sampling,
         sampling_model=sampling_model,
     )
 

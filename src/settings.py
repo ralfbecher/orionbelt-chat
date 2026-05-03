@@ -38,6 +38,14 @@ class Settings(BaseSettings):
     analytics_server_dir: str = ""
     semantic_layer_server_dir: str = ""
 
+    # ── MCP sampling ────────────────────────────────────────
+    # When true (default), advertises the sampling.tools capability and
+    # answers `sampling/createMessage` requests using the env-configured
+    # default model. Set to false to disable server-initiated LLM calls
+    # (cost / privacy kill switch); servers will then fall back to whatever
+    # manual review path they implement.
+    mcp_allow_sampling: bool = True
+
     # ── System prompt ───────────────────────────────────────
     # Path to the markdown/text file holding the agent's system prompt.
     # If empty, defaults to `system_prompt.md` at the project root.

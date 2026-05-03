@@ -15,19 +15,31 @@ from mcp.types import SamplingCapability, SamplingToolsCapability
 
 
 class _SamplingToolsClientSession(ClientSession):
-    """ClientSession that advertises `sampling.tools` by default.
+    """ClientSession that advertises `sampling.tools` when a callback is set.
 
     Servers can issue `sampling/createMessage` with a `tools` parameter
     (per the MCP spec) instead of falling back to a manual review path.
+    If pydantic-ai constructs us with `sampling_callback=None` (i.e.
+    `allow_sampling=False`), we keep the capability unset so we don't
+    advertise something we can't fulfill.
     """
 
-    def __init__(self, *args, sampling_capabilities=None, **kwargs):
-        if sampling_capabilities is None:
+    def __init__(
+        self,
+        *args,
+        sampling_callback=None,
+        sampling_capabilities=None,
+        **kwargs,
+    ):
+        if sampling_callback is not None and sampling_capabilities is None:
             sampling_capabilities = SamplingCapability(
                 tools=SamplingToolsCapability()
             )
         super().__init__(
-            *args, sampling_capabilities=sampling_capabilities, **kwargs
+            *args,
+            sampling_callback=sampling_callback,
+            sampling_capabilities=sampling_capabilities,
+            **kwargs,
         )
 
 
