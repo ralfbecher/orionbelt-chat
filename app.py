@@ -150,6 +150,50 @@ async def on_start():
         cl.user_session.set("status_msg", status_msg)
 
 
+def _wrap_sampling_for_chainlit(server, server_name: str) -> None:
+    """Wrap the MCP server's sampling callback to render a Chainlit Step.
+
+    Must be called BEFORE ``server.__aenter__()`` so the underlying
+    ClientSession captures the wrapped callback (the original is bound
+    by reference inside the session constructor).
+    """
+    original = server._sampling_callback
+
+    async def wrapped(context, params):
+        try:
+            lines = []
+            for m in getattr(params, "messages", []) or []:
+                role = getattr(m, "role", "?")
+                content = getattr(m, "content", m)
+                text = getattr(content, "text", None)
+                lines.append(f"**[{role}]** {text or content}")
+            question = "\n\n".join(lines)
+        except Exception:
+            question = str(params)
+        if len(question) > STEP_OUTPUT_LIMIT:
+            question = question[:STEP_OUTPUT_LIMIT] + f"\n\n… (truncated — {len(question):,} chars)"
+
+        step = cl.Step(name=f"Sampling: {server_name}", type="tool")
+        step.input = question
+        await step.send()
+        try:
+            result = await original(context, params)
+            content = getattr(result, "content", None)
+            text = getattr(content, "text", None) if content is not None else None
+            output = text or str(result)
+            if len(output) > STEP_OUTPUT_LIMIT:
+                output = output[:STEP_OUTPUT_LIMIT] + f"\n\n… (truncated — {len(output):,} chars)"
+            step.output = output
+            await step.update()
+            return result
+        except Exception as e:
+            step.output = f"Error: {e}"
+            await step.update()
+            raise
+
+    server._sampling_callback = wrapped
+
+
 async def _init_agent(provider: str, model: str) -> bool:
     """
     Connect MCP servers individually, create agent with the successful ones.
@@ -174,6 +218,7 @@ async def _init_agent(provider: str, model: str) -> bool:
 
     # Connect each MCP server individually
     for name, server in named_servers:
+        _wrap_sampling_for_chainlit(server, name)
         try:
             await server.__aenter__()
             connected.append(server)
