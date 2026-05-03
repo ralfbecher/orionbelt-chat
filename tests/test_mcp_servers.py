@@ -26,11 +26,11 @@ class TestIsUrl:
 
 class TestMakeServer:
     def test_url_creates_streamable_http(self):
-        server = _make_server("http://localhost:8080/mcp", "my_module")
+        server = _make_server("http://localhost:8080/mcp", "my_module", None)
         assert isinstance(server, MCPServerStreamableHTTP)
 
     def test_path_creates_stdio(self):
-        server = _make_server("/opt/mcp-server", "my_module")
+        server = _make_server("/opt/mcp-server", "my_module", None)
         assert isinstance(server, MCPServerStdio)
 
 
