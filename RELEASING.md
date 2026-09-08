@@ -15,20 +15,35 @@ Releases are cut from `main` and driven entirely by pushing a version tag.
    Then regenerate the committed attribution, which carries the version in its
    heading and is checked by CI against the locked environment.
 
-   **Regenerate it on Linux.** The resolved set is platform-dependent —
-   `jeepney` and `SecretStorage` install there and not on macOS — so a file
-   generated on a Mac is two packages short and CI rejects it. The image and
-   the release assets are Linux, so Linux is the answer that is correct
-   anyway. If you are not on Linux, run it in a container:
+   **Regenerate it on Linux, resolved for 3.11.** Two things about the
+   environment matter, and neither of them is the machine you happen to be on:
+
+   - *Linux.* The resolved set is platform-dependent — `jeepney` and
+     `SecretStorage` install there and not on macOS — so a file generated on
+     a Mac is two packages short and CI rejects it. The image and the release
+     assets are Linux, so Linux is the answer that is correct anyway.
+   - *3.11, not the 3.13 the image ships.* The notice credits the union of
+     every interpreter `requires-python` supports, and only the floor installs
+     all of it: `backports-tarfile`, `importlib-metadata` and `zipp` carry
+     `python_full_version < '3.12'` markers, so on 3.13 they are absent and
+     the generator stops on three packages it cannot read. Over-crediting is
+     the safe direction — the image contains a subset of what is credited,
+     never more. See the comment on the `licences` job in `ci.yml`.
+
+   If you are not on Linux, run it in a container:
 
    ```bash
-   docker run --rm --platform linux/amd64 -v "$PWD":/w -w /w python:3.13-slim bash -c '
+   docker run --rm --platform linux/amd64 -v "$PWD":/w -w /w python:3.11-slim bash -c '
      pip install -q uv
-     UV_PROJECT_ENVIRONMENT=/tmp/venv uv sync --frozen --no-dev
-     /tmp/venv/bin/python -m pip install -q packaging
+     UV_PROJECT_ENVIRONMENT=/tmp/venv uv sync --frozen --no-dev --python 3.11
+     uv pip install --python /tmp/venv/bin/python -q packaging
      /tmp/venv/bin/python scripts/third_party_notices.py
    '
    ```
+
+   `packaging` goes in with `uv pip`, not `python -m pip`: the venv uv builds
+   has no pip in it, and it cannot come from the dev extra either, since this
+   environment is deliberately `--no-dev`.
 
 2. **Open a PR, get CI green, merge to `main`.** Never tag off a branch.
 
@@ -44,9 +59,10 @@ That's the whole manual part. Pushing the tag triggers three workflows:
 
 - **`docker-publish.yml`** builds and pushes the image to Docker Hub
   (`:X.Y.Z`, `:X.Y`, `:X`, `:latest`) and syncs the Docker Hub description.
-- **`release.yml`** verifies the four version locations agree with the tag,
-  then creates the GitHub Release with auto-generated notes and marks it
-  Latest.
+- **`release.yml`** verifies that `pyproject.toml`, `header.js` and the README
+  badge agree with the tag, then creates the GitHub Release with auto-generated
+  notes and marks it Latest. `uv.lock` is the fourth place, but it is already
+  guarded by CI's `uv sync --frozen` and is not re-checked here.
 - **`pypi-publish.yml`** builds the sdist and wheel, checks the wheel really
   contains the packaged assets, and uploads to PyPI.
 
