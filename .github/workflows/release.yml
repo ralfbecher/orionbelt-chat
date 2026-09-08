@@ -56,8 +56,12 @@ jobs:
         with:
           enable-cache: true
           # Must match the Dockerfile's base image: the resolved set is
-          # interpreter-dependent (3.13 pulls in audioop-lts, which 3.12 does
-          # not), and the release assets are meant to describe the image.
+          # interpreter-dependent -- 3.11 pulls in backports-tarfile,
+          # importlib-metadata and zipp, which 3.13 does not, a difference of
+          # three packages in the current lock -- and the SBOM is meant to
+          # describe the image. This governs `.venv` and the SBOM only; the
+          # notice check below deliberately resolves its own environment on
+          # 3.11, for the opposite reason. See the note there.
           python-version: "3.13"
 
       - name: Resolve the runtime environment
@@ -66,10 +70,30 @@ jobs:
       # Verified, not regenerated. The notice attached to a release must be the
       # file the repository was reviewed with, so a tag pushed past a bypassed CI
       # run fails here instead of publishing a notice nobody read.
+      #
+      # Its own environment, resolved for 3.11, rather than the 3.13 `.venv`
+      # above. The two are answering different questions and the interpreter
+      # follows from that: the SBOM describes the shipped image, so it wants the
+      # image's 3.13, while the notice credits the union of every interpreter
+      # requires-python supports, and only the floor installs all of it --
+      # backports-tarfile, importlib-metadata and zipp carry
+      # `python_full_version < 3.12` markers, so on 3.13 they are absent and the
+      # gate cannot read the licences of packages the notice lists. This must
+      # stay in step with the `licences` job in ci.yml, which is what generated
+      # the committed file; if they disagree on the interpreter, every release
+      # fails here. UV_PROJECT_ENVIRONMENT keeps it out of `.venv`, which the
+      # SBOM step still needs on 3.13.
+      #
+      # packaging is installed with `uv pip`, not `python -m pip`: the venv uv
+      # builds has no pip in it, and it cannot come from the dev extra either,
+      # since this environment is deliberately --no-dev.
       - name: THIRD_PARTY_NOTICES.md is current
+        env:
+          UV_PROJECT_ENVIRONMENT: ${{ runner.temp }}/notice-venv
         run: |
-          .venv/bin/python -m pip install -q packaging
-          .venv/bin/python scripts/third_party_notices.py --check
+          uv sync --frozen --no-dev --python 3.11
+          uv pip install --python "$RUNNER_TEMP/notice-venv/bin/python" -q packaging
+          "$RUNNER_TEMP/notice-venv/bin/python" scripts/third_party_notices.py --check
 
       # CycloneDX rather than the image attestation, so the SBOM is fetchable
       # without a registry client. --output-reproducible keeps it diffable
